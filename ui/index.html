@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Control — model assignment & free-lane spread</title>
+<!--CK:CSS--><style id="city-kit-css">
+/* City kit: the shared look of Fleet Control, Hermes TV and Agent City.
+   Neon on near-black, glass panels with crisp edges and a soft inner glow, mono type, the 3D city behind it all.
+   Fleet Control carries an inline copy (its server serves only index.html). */
+:root {
+  --ck-bg: #00060a;
+  --ck-glass: rgba(3, 16, 24, 0.62);
+  --ck-glass-hi: rgba(6, 26, 38, 0.74);
+  --ck-glass-solid: rgba(2, 12, 18, 0.9);
+  --ck-edge: rgba(0, 229, 255, 0.2);
+  --ck-edge-hi: rgba(0, 229, 255, 0.55);
+  --ck-text: #c6f7ff;
+  --ck-hot: #e9feff;
+  --ck-mut: #5b95a1;
+  --ck-cyan: #00e5ff;
+  --ck-mag: #ff2bd6;
+  --ck-lime: #39ff14;
+  --ck-gold: #ffe600;
+  --ck-violet: #b026ff;
+  --ck-amber: #ffb300;
+  --ck-red: #ff003c;
+  --ck-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --ck-nav-h: 52px;
+  --ck-r: 10px;
+}
+html { background: var(--ck-bg); color-scheme: dark; }
+body.ck { margin: 0; background: transparent; color: var(--ck-text); font: 12.5px/1.5 var(--ck-mono); letter-spacing: .02em; }
+
+/* ---------- backdrop: the live city canvas, then a veil that keeps text readable */
+#ck-city { position: fixed; inset: 0; z-index: -2; display: block; width: 100vw; height: 100vh; background: var(--ck-bg); }
+.ck-veil { position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(120% 80% at 50% 0%, transparent 30%, rgba(0, 6, 10, .55) 100%),
+    linear-gradient(180deg, rgba(0, 6, 10, .05) 0%, rgba(0, 6, 10, .35) 45%, rgba(0, 6, 10, .78) 100%); }
+
+/* ---------- glass */
+.ck-glass { position: relative; background: var(--ck-glass); border: 1px solid var(--ck-edge); border-radius: var(--ck-r);
+  backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .05), inset 0 0 30px rgba(0, 229, 255, .035); }
+/* lit top edge, like the neon rim of a tower roof */
+.ck-glass::before { content: ""; position: absolute; left: 14px; right: 14px; top: -1px; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--ck-rim, rgba(0, 229, 255, .8)), transparent); opacity: .7; }
+
+/* ---------- nav */
+.ck-nav { position: sticky; top: 0; z-index: 50; height: var(--ck-nav-h); display: flex; align-items: center; gap: 22px; padding: 0 22px;
+  background: linear-gradient(180deg, rgba(0, 8, 13, .88), rgba(0, 8, 13, .62)); border-bottom: 1px solid var(--ck-edge);
+  backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%); }
+.ck-nav.ck-fixed { position: fixed; left: 0; right: 0; }
+.ck-brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .26em; font-size: 12px; color: var(--ck-hot); white-space: nowrap; text-decoration: none; }
+.ck-brand i { width: 20px; height: 20px; border: 1.5px solid var(--ck-cyan); border-radius: 3px; position: relative; transform: rotate(45deg);
+  box-shadow: 0 0 10px var(--ck-cyan), inset 0 0 8px rgba(0, 229, 255, .5); }
+.ck-brand i::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--ck-mag); box-shadow: 0 0 10px var(--ck-mag); }
+.ck-brand b { color: var(--ck-mag); text-shadow: 0 0 10px var(--ck-mag); font-weight: 700; }
+.ck-tabs { display: flex; gap: 4px; height: 100%; align-items: stretch; }
+.ck-tabs a { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 14px; color: var(--ck-mut); text-decoration: none;
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase; transition: color .15s; white-space: nowrap; }
+.ck-tabs a:hover { color: var(--ck-text); }
+.ck-tabs a::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--ck-cyan);
+  box-shadow: 0 0 10px var(--ck-cyan), 0 0 20px var(--ck-cyan); transform: scaleX(0); transition: transform .2s; }
+.ck-tabs a[aria-current="page"] { color: var(--ck-hot); text-shadow: 0 0 10px rgba(0, 229, 255, .8); }
+.ck-tabs a[aria-current="page"]::after { transform: scaleX(1); }
+.ck-tabs a .k { font-size: 9px; color: var(--ck-mut); border: 1px solid var(--ck-edge); border-radius: 3px; padding: 0 4px; letter-spacing: 0; }
+.ck-nav .ck-grow { flex: 1; }
+.ck-clock { color: var(--ck-mut); font-size: 11px; letter-spacing: .12em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ck-clock b { color: var(--ck-cyan); font-weight: 600; }
+
+/* ---------- machines (#boxes) */
+.ck-boxes { display: flex; flex-direction: column; gap: 8px; }
+.ck-boxes .ck-boxes-head { display: flex; align-items: baseline; gap: 8px; }
+.ck-box { --c: var(--ck-cyan); position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: 2px 12px; align-items: center;
+  padding: 10px 12px 10px 14px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 12%, transparent), rgba(0, 10, 16, .3) 60%); overflow: hidden; }
+.ck-box::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); box-shadow: 0 0 12px var(--c); }
+.ck-box .orb { grid-row: span 2; width: 12px; height: 12px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c), 0 0 22px var(--c); }
+.ck-box.busy .orb { animation: ck-pulse 1.6s ease-in-out infinite; }
+.ck-box .nm { color: var(--ck-hot); font-weight: 700; letter-spacing: .14em; text-transform: uppercase; font-size: 12px; white-space: nowrap; }
+.ck-box .st { justify-self: end; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--c); text-shadow: 0 0 8px var(--c); white-space: nowrap; }
+.ck-box .ln { grid-column: 2 / 4; color: var(--ck-mut); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ck-box .ln b { color: var(--ck-text); font-weight: 600; }
+.ck-box .sky { grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 2px; height: 18px; margin-top: 6px; }
+.ck-box .sky i { flex: 1; min-width: 2px; max-width: 10px; background: var(--b, var(--c)); opacity: .55; border-radius: 1px 1px 0 0; }
+.ck-box .sky i.on { opacity: 1; box-shadow: 0 0 8px var(--b, var(--c)); }
+.ck-box.off { --c: #3b5961; filter: saturate(.3); opacity: .55; }
+.ck-box.off .orb { box-shadow: none; }
+.ck-boxes .ck-none { color: var(--ck-mut); font-size: 11px; }
+@keyframes ck-pulse { 50% { transform: scale(1.35); box-shadow: 0 0 14px var(--c), 0 0 34px var(--c); } }
+
+/* ---------- small shared bits */
+.ck-kicker { font-size: 10.5px; letter-spacing: .24em; text-transform: uppercase; color: var(--ck-mut); }
+.ck-h { margin: 0; display: flex; align-items: center; gap: 10px; font-size: 11px; letter-spacing: .22em; text-transform: uppercase; font-weight: 600;
+  color: var(--h, var(--ck-cyan)); text-shadow: 0 0 10px color-mix(in srgb, var(--h, var(--ck-cyan)) 70%, transparent); }
+.ck-h::before { content: ""; width: 7px; height: 7px; transform: rotate(45deg); border: 1.5px solid var(--h, var(--ck-cyan)); box-shadow: 0 0 8px var(--h, var(--ck-cyan)); }
+.ck-scroll::-webkit-scrollbar, .ck-scroll *::-webkit-scrollbar { width: 8px; height: 8px; }
+.ck-scroll::-webkit-scrollbar-thumb, .ck-scroll *::-webkit-scrollbar-thumb { background: rgba(0, 229, 255, .18); border-radius: 8px; }
+.ck-scroll::-webkit-scrollbar-track, .ck-scroll *::-webkit-scrollbar-track { background: transparent; }
+@media (prefers-reduced-motion: reduce) { .ck-box.busy .orb { animation: none; } }
+@media (max-width: 760px) { .ck-tabs a { padding: 0 8px; letter-spacing: .08em; } .ck-tabs a .k, .ck-clock { display: none; } .ck-nav { gap: 10px; padding: 0 12px; } }
+
+/* The bot panel (fleet-actions.js) opens below the shared nav instead of under it, so its name and the 3D asset picker
+   are always in view. In Agent City's full screen the nav slides away, so the panel goes back to the top. */
+@media (min-width: 761px) {
+  body.ck #faPanel { top: calc(var(--ck-nav-h) + 12px); }
+  body.ck.fs #faPanel { top: 14px; }
+}
+</style><!--/CK:CSS-->
+<style>
+  /* Fleet Control: the control deck of the city. Glass over the live backdrop, profiles in the middle, the plumbing on the side. */
+  :root{
+    --bg:var(--ck-bg); --card:var(--ck-glass); --inset:rgba(0,8,13,.78); --line:rgba(0,229,255,.14); --line2:rgba(0,229,255,.3);
+    --fg:var(--ck-text); --hot:var(--ck-hot); --mut:var(--ck-mut); --acc:var(--ck-cyan); --ok:var(--ck-lime);
+    --warn:var(--ck-amber); --bad:var(--ck-red); --free:var(--ck-violet); --mag:var(--ck-mag);
+    --mono:var(--ck-mono); --tooltip-max-width: 640px;
+  }
+  *{box-sizing:border-box}
+  code{font-family:var(--mono);font-size:.95em;color:var(--hot)}
+  .wrap{max-width:1720px;margin:0 auto;padding:0 26px 110px}
+  /* hero */
+  header.hero{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:26px;align-items:end;padding:40px 0 22px;min-height:330px}
+  .hero h1{margin:6px 0 10px;font-size:44px;line-height:1;letter-spacing:.2em;font-weight:800;color:var(--hot);
+    text-shadow:0 0 18px rgba(0,229,255,.65),0 0 46px rgba(0,229,255,.3)}
+  .hero h1 span{color:var(--mag);text-shadow:0 0 18px var(--mag),0 0 46px rgba(255,43,214,.45)}
+  .hero .line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sub{color:var(--mut);font-size:12px}
+  #stamp{color:var(--fg);opacity:.8}
+  .grow{flex:1}
+  button{background:linear-gradient(180deg,rgba(0,229,255,.95),rgba(0,180,210,.95));color:#00060a;border:0;font-family:inherit;letter-spacing:.06em;
+    padding:7px 15px;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px;box-shadow:0 0 16px rgba(0,229,255,.3);transition:box-shadow .15s,filter .15s}
+  button:hover{box-shadow:0 0 24px rgba(0,229,255,.55)}
+  button.ghost{background:rgba(3,18,27,.7);color:var(--fg);border:1px solid var(--line2);box-shadow:none;font-weight:600}
+  button.ghost:hover{border-color:var(--acc);color:var(--hot);box-shadow:0 0 14px rgba(0,229,255,.3)}
+  button.danger{background:linear-gradient(180deg,#ff5ae2,#d61cb2);color:#14000f;box-shadow:0 0 18px rgba(255,43,214,.4)}
+  button.danger:hover{box-shadow:0 0 28px rgba(255,43,214,.7)}
+  button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  #boxes{padding:16px}
+  /* kpis: floating neon numbers + where profiles route */
+  .grid{display:flex;gap:34px;flex-wrap:wrap;margin-top:24px}
+  .kpi .n{font-size:30px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;text-shadow:0 0 14px currentColor}
+  .kpi .l{color:var(--mut);font-size:10.5px;text-transform:uppercase;letter-spacing:.16em;margin-top:2px}
+  .kpi:nth-child(1) .n{color:var(--acc)!important} .kpi:nth-child(3) .n{color:var(--ok)!important} .kpi:nth-child(4) .n{color:var(--free)!important}
+  #spread{margin-top:20px;max-width:760px}
+  #spread .bar{display:flex;height:10px;border-radius:5px;overflow:hidden;border:1px solid var(--line);background:rgba(0,8,13,.6)}
+  #spread .bar i{display:block;height:100%;background:var(--c);box-shadow:0 0 12px var(--c);border-right:1px solid rgba(0,0,0,.6)}
+  #spread .key{display:flex;gap:14px;flex-wrap:wrap;margin-top:7px;font-size:11px;color:var(--mut)}
+  #spread .key span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c);box-shadow:0 0 6px var(--c);margin-right:6px}
+  #spread .key b{color:var(--fg);font-weight:600}
+  /* deck */
+  .deck{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;align-items:start}
+  .col{display:flex;flex-direction:column;gap:18px;min-width:0}
+  .side{position:sticky;top:calc(var(--ck-nav-h) + 14px)}
+  .card{padding:16px 18px}
+  .card.flush{padding:6px 12px 10px}
+  .head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  h2.ck-h{font-size:11px}
+  /* alerts */
+  #alerts{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+  #alerts:empty{display:none}
+  .warnbox,.okbox{padding:10px 14px;border-radius:9px;font-size:12px;border:1px solid;backdrop-filter:blur(12px)}
+  .warnbox{border-color:rgba(255,179,0,.55);background:rgba(36,24,0,.7);color:#ffe1a0;box-shadow:inset 3px 0 0 var(--warn),0 0 18px rgba(255,179,0,.12)}
+  .warnbox b{color:var(--warn)}
+  .okbox{border-color:rgba(57,255,20,.5);background:rgba(4,30,8,.7);color:#c9ffbf;box-shadow:inset 3px 0 0 var(--ok)}
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--mut);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;padding:9px 8px;border-bottom:1px solid rgba(0,229,255,.4);white-space:nowrap}
+  td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:last-child td{border-bottom:0}
+  #fleet tbody tr:not(.detail-row):hover td{background:rgba(0,229,255,.045)}
+  #lanes td b{color:var(--hot)}
+  select{background:rgba(0,8,13,.85);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:6px 8px;font-size:12px;width:100%;max-width:240px;font-family:inherit}
+  select:hover{border-color:rgba(0,229,255,.55)}
+  select:focus{outline:none;border-color:var(--acc);box-shadow:0 0 12px rgba(0,229,255,.35)}
+  select.dirty{border-color:var(--warn);background:rgba(50,34,0,.85);box-shadow:0 0 12px rgba(255,179,0,.35)}
+  .role{color:var(--mut);font-size:12px;max-width:320px}
+  .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:600;border:1px solid}
+  .t-worker{color:var(--acc);border-color:rgba(0,229,255,.4)} .t-overlord{color:var(--free);border-color:rgba(176,38,255,.5)} .t-reserve,.t-desktop{color:var(--warn);border-color:rgba(255,179,0,.4)}
+  .st{font-size:10.5px;padding:2px 7px;border-radius:4px;font-weight:600;white-space:nowrap;letter-spacing:.04em}
+  .s-ok{background:rgba(57,255,20,.13);color:var(--ok);text-shadow:0 0 6px rgba(57,255,20,.6)} .s-bad{background:rgba(255,0,60,.15);color:#ff5c80}
+  .s-warn{background:rgba(255,179,0,.14);color:var(--warn)} .s-un{background:rgba(0,229,255,.06);color:var(--mut)}
+  .free{color:var(--free)} .paid{color:var(--warn)} .muted{color:var(--mut)} .small{font-size:11.5px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;background:rgba(0,10,16,.6);border:1px solid var(--line);
+    color:var(--mut);font-size:11px;backdrop-filter:blur(8px);white-space:nowrap}
+  .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--mut)}
+  .pill.ok{color:#b9ffa8;border-color:rgba(57,255,20,.4)} .pill.ok::before{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .pill.warn{color:#ffe1a0;border-color:rgba(255,179,0,.45)} .pill.warn::before{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  .pill.bad{color:#ff9db2;border-color:rgba(255,0,60,.5)} .pill.bad::before{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  td .pill{padding:1px 7px;font-size:10px} td .pill::before{display:none}
+  .table-wrap{overflow-x:auto}
+  #fleet{width:100%;min-width:880px}
+  #fleet td:first-child{min-width:170px}
+  #fleet .profile-link b{font-size:13px;letter-spacing:.03em}
+  .ptool{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  input[type=search]{font:inherit;background:rgba(0,8,13,.7);color:var(--fg);border:1px solid var(--line2);border-radius:7px;padding:6px 10px;min-width:220px}
+  input[type=search]:focus{outline:none;border-color:var(--acc);box-shadow:0 0 12px rgba(0,229,255,.3)}
+  tr.hide{display:none!important}
+  .detail-row td{padding:0;border:0;background:transparent}
+  .detail-cell{padding:10px 14px 12px 20px;font-size:12px;color:var(--mut);border-top:1px dashed var(--line);background:rgba(0,20,30,.5)}
+  .detail-cell .label{color:var(--acc);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-right:8px}
+  .detail-toggle{cursor:pointer;user-select:none;font-size:10px;color:var(--mut);margin-left:8px} .detail-toggle:hover{color:var(--acc)}
+  .detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:8px}
+  .detail-item{background:rgba(0,8,13,.6);border:1px solid var(--line);border-radius:7px;padding:8px 10px}
+  .detail-item .label{display:block;margin-bottom:4px}
+  .detail-item code{font-size:11px;background:rgba(0,6,10,.8);padding:1px 4px;border-radius:3px}
+  .detail-soul-preview{font-size:11px;color:var(--mut);white-space:pre-wrap;max-height:120px;overflow:auto;background:rgba(0,6,10,.5);padding:8px;border-radius:5px;border:1px solid var(--line)}
+  .wire-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .wire-row:last-child{border-bottom:0}
+  .wire-row .p{color:var(--hot);min-width:100px;font-weight:600} .wire-row .l{color:var(--mag);min-width:100px}
+  .wire-head{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  #gwBar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .non-chat{opacity:.55;font-style:italic} .non-chat .tag{opacity:.5}
+  .pinned-row td{background:linear-gradient(90deg,rgba(176,38,255,.14),transparent 70%)}
+  .pinned-row td:first-child{box-shadow:inset 3px 0 0 var(--free)}
+  .pinned-row td:first-child::before{content:"★ ";color:var(--free);text-shadow:0 0 8px var(--free)}
+  .has-tooltip{position:relative;cursor:help}
+  .has-tooltip:hover::after{content:attr(data-tip);position:absolute;left:0;bottom:100%;margin-bottom:6px;width:max-content;max-width:var(--tooltip-max-width);
+    background:var(--ck-glass-solid);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;font-size:11.5px;color:var(--fg);white-space:pre-wrap;z-index:30;
+    box-shadow:0 10px 30px rgba(0,0,0,.6),0 0 16px rgba(0,229,255,.18);font-weight:400}
+  .has-tooltip[data-tip=""]:hover::after{display:none}
+  .profile-link{cursor:pointer;color:var(--acc);text-decoration:none;text-shadow:0 0 8px rgba(0,229,255,.45)}
+  .profile-link:hover{color:var(--hot)}
+  .loading{color:var(--mut);font-style:italic}
+  /* external muscle */
+  #ext{display:flex;flex-direction:column;gap:10px}
+  .ext{padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:rgba(0,10,16,.5);box-shadow:inset 3px 0 0 var(--free)}
+  .ext .nm{color:var(--hot);font-weight:700;letter-spacing:.03em}
+  /* plan diff */
+  #planOut pre{background:rgba(0,6,10,.8);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:12px;max-height:50vh;overflow:auto;white-space:pre-wrap;margin:10px 0 0}
+  /* pending-changes bar */
+  .sticky-actions{position:fixed;left:50%;bottom:18px;z-index:40;display:flex;align-items:center;gap:12px;min-width:min(760px,calc(100vw - 32px));max-width:calc(100vw - 32px);
+    padding:11px 14px 11px 18px;border-radius:12px;background:rgba(30,20,0,.82);border:1px solid rgba(255,179,0,.6);color:#ffe1a0;
+    backdrop-filter:blur(16px);box-shadow:0 12px 40px rgba(0,0,0,.6),0 0 26px rgba(255,179,0,.25);
+    transform:translate(-50%,160%);opacity:0;pointer-events:none;transition:transform .25s,opacity .25s}
+  .sticky-actions.on{transform:translate(-50%,0);opacity:1;pointer-events:auto}
+  .sticky-actions b{color:var(--warn);font-size:16px;text-shadow:0 0 10px var(--warn)}
+  .sticky-actions #dirtyNames{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40vw}
+  #toast{position:fixed;right:22px;bottom:22px;z-index:60;display:none;max-width:560px;padding:12px 16px;border-radius:10px;font-size:12px;
+    background:var(--ck-glass-solid);border:1px solid var(--line2);border-left:3px solid var(--ok);backdrop-filter:blur(14px);box-shadow:0 10px 30px rgba(0,0,0,.6)}
+  .sticky-actions.on ~ #toast{bottom:92px}
+  /* modal */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,4,8,.72);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--ck-glass-solid);border:1px solid var(--line2);border-radius:12px;max-width:1100px;width:100%;max-height:95vh;overflow:auto;display:flex;flex-direction:column;
+    box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 30px rgba(0,229,255,.15)}
+  .modal-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal-header h3{margin:0;font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--hot);text-shadow:0 0 10px rgba(0,229,255,.6)}
+  .modal-tabs{display:flex;border-bottom:1px solid var(--line);background:rgba(0,20,30,.55);flex-wrap:wrap}
+  .modal-tab{padding:10px 16px;cursor:pointer;color:var(--mut);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;border:0;border-bottom:2px solid transparent;
+    margin-bottom:-1px;background:transparent;border-radius:0;box-shadow:none}
+  .modal-tab:hover{color:var(--fg);box-shadow:none}
+  .modal-tab.active{color:var(--acc);border-bottom-color:var(--acc);text-shadow:0 0 8px var(--acc)}
+  .modal-body{padding:16px 18px;overflow:auto;flex:1}
+  .modal-panel{display:none} .modal-panel.active{display:block}
+  .modal-panel pre{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:14px;font-size:12px;max-height:60vh;overflow:auto;white-space:pre-wrap}
+  .modal-panel textarea{width:100%;min-height:50vh;background:var(--inset);color:var(--fg);border:1px solid var(--line2);border-radius:8px;padding:12px;font:12px var(--mono);resize:vertical}
+  .modal-panel textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 12px rgba(0,229,255,.3)}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--line)}
+  .soul-toolbar{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+  .soul-search{flex:1;min-width:200px;padding:6px 10px;background:var(--inset);color:var(--fg);border:1px solid var(--line2);border-radius:6px;font-size:12px;font-family:inherit}
+  .soul-search:focus{outline:none;border-color:var(--acc)}
+  .soul-rendered{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:16px;max-height:70vh;overflow:auto;font-size:13px;line-height:1.6;color:var(--fg)}
+  .soul-rendered h1,.soul-rendered h2,.soul-rendered h3{border-bottom:1px solid var(--line);padding-bottom:4px;margin-top:16px;color:var(--hot)}
+  .soul-rendered code{background:rgba(0,6,10,.8);padding:1px 5px;border-radius:3px}
+  .soul-rendered pre{background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto}
+  .soul-rendered pre code{background:transparent;padding:0}
+  .soul-rendered blockquote{border-left:3px solid var(--acc);padding-left:12px;color:var(--mut);margin:8px 0}
+  .soul-rendered ul,.soul-rendered ol{padding-left:24px}
+  .soul-rendered hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+  .soul-rendered strong{color:var(--acc)} .soul-rendered em{color:var(--free)}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .meta-card{background:rgba(0,20,30,.55);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+  .meta-card .label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--acc);font-weight:600;margin-bottom:6px}
+  .meta-card .value{font-size:13px;color:var(--fg);word-break:break-word}
+  .meta-card .value code{background:rgba(0,6,10,.8);padding:1px 4px;border-radius:3px}
+  kbd{font:10px var(--mono);border:1px solid var(--line2);border-radius:3px;padding:0 4px;color:var(--mut)}
+  @media (max-width:1200px){.deck{grid-template-columns:1fr}.side{position:static}header.hero{grid-template-columns:1fr;min-height:0}}
+</style>
+</head>
+<body class="ck ck-scroll" data-ck-page="fleet">
+<canvas id="ck-city" aria-hidden="true"></canvas><div class="ck-veil"></div>
+<div class="wrap">
+<header class="hero">
+  <div>
+    <div class="ck-kicker">Model assignment · free-lane spread · every profile</div>
+    <h1>Fleet <span>Control</span></h1>
+    <div class="line">
+      <span class="sub" id="stamp">loading…</span>
+      <span id="guardStatus" class="pill">guard: checking…</span>
+      <span id="wirePill" class="pill">wiring: checking…</span>
+      <span id="gwPill" class="pill">gateway: checking…</span>
+    </div>
+    <div class="actions">
+      <button class="ghost" id="btnRefresh">Refresh lanes</button>
+      <button class="ghost" id="btnPlan">Preview changes</button>
+      <button class="danger" id="btnApply" disabled>Apply</button>
+    </div>
+    <div class="grid" id="kpis"></div>
+    <div id="spread"></div>
+  </div>
+  <aside class="ck-glass ck-boxes" id="boxes" aria-live="polite"><div class="ck-none">Looking for machines…</div></aside>
+</header>
+
+<main>
+  <div id="alerts"></div>
+  <div class="deck">
+    <div class="col">
+      <section class="ck-glass card">
+        <div class="head">
+          <h2 class="ck-h">Profiles — main + fallbacks</h2>
+          <span class="grow"></span>
+          <div class="ptool"><span class="sub" id="profileCount"></span>
+            <input type="search" id="profileFilter" placeholder="find a profile or model  ( / )" aria-label="Find a profile or model"></div>
+        </div>
+        <div class="sub" style="margin-bottom:10px">
+          Each dropdown lists every endpoint in the live catalogue, grouped by lane. Change one and it goes amber, and that profile's tower lights up in the city.
+          Nothing is written until you press <b>Preview changes</b>, read the diff, then <b>Apply</b>. Every touched config is backed up first.
+          Hover a profile for its function; click its name for config.yaml, SOUL.md and .env; click the row for details.
+        </div>
+        <div class="table-wrap ck-scroll">
+          <table id="fleet"><thead><tr>
+            <th>Profile</th><th>Main model</th><th>Fallback 1</th><th>Fallback 2</th><th>Fallback 3</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </section>
+      <section class="ck-glass card" style="--ck-rim: var(--ck-amber)">
+        <div class="head"><h2 class="ck-h" style="--h: var(--ck-amber)">Plan diff</h2></div>
+        <div id="planOut" class="muted small">No changes previewed yet.</div>
+      </section>
+      <section class="ck-glass card" style="--ck-rim: var(--ck-mag)">
+        <div class="head"><h2 class="ck-h" style="--h: var(--ck-mag)">Lane spread — the OpenRouter bottleneck</h2></div>
+        <table id="lanes"><thead><tr>
+          <th>Lane</th><th>Free headroom</th><th>Bottleneck</th><th>Quality</th><th>Catalogue</th>
+        </tr></thead><tbody></tbody></table>
+      </section>
+    </div>
+    <div class="col side">
+      <section class="ck-glass card" style="--ck-rim: var(--ck-lime)">
+        <div class="head"><h2 class="ck-h" style="--h: var(--ck-lime)">Wiring &amp; gateway</h2></div>
+        <div class="wire-head">
+          <span class="muted small" style="flex:1">Every lane a profile routes to needs a <code>providers:</code> stanza and its key in that profile's <code>.env</code>.
+            Apply fills these in automatically; this catches anything changed outside the dashboard.</span>
+          <button class="ghost" id="btnWireFix" style="display:none">Fix wiring</button>
+        </div>
+        <div id="wireOut" class="small muted">checking…</div>
+        <div id="gwBar" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+          <span class="small muted" id="gwText">gateway: checking…</span>
+          <span class="grow"></span>
+          <button class="ghost" id="btnGwIdle">Restart when idle</button>
+          <button class="ghost" id="btnGwNow">Restart now</button>
+          <button class="ghost" id="btnGwCancel" style="display:none">Cancel wait</button>
+        </div>
+      </section>
+      <section class="ck-glass card" style="--ck-rim: var(--ck-violet)">
+        <div class="head"><h2 class="ck-h" style="--h: var(--ck-violet)">External muscle — not Hermes profiles</h2></div>
+        <div id="ext"></div>
+      </section>
+    </div>
+  </div>
+</main>
+<div class="sub" style="margin-top:18px"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch app · <kbd>/</kbd> find a profile</div>
+</div>
+
+<div class="sticky-actions" id="sticky">
+  <b id="dirtyCount">0</b> pending change(s)
+  <span class="grow"></span>
+  <span class="muted small" id="dirtyNames"></span>
+  <button class="ghost" id="btnReset">Discard</button>
+  <button class="danger" id="btnApply2">Apply changes</button>
+</div>
+
+<div id="toast"></div>
+
+<!-- Profile Detail Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalTitle">Profile Detail</h3>
+      <button class="ghost" id="modalClose" style="padding:4px 10px;font-size:12px">Close</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" data-tab="config">config.yaml</button>
+      <button class="modal-tab" data-tab="soul">SOUL.md</button>
+      <button class="modal-tab" data-tab="env">.env (vars only)</button>
+      <button class="modal-tab" data-tab="meta">Meta</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-panel active" id="panel-config">
+        <div class="loading">Loading config…</div>
+      </div>
+      <div class="modal-panel" id="panel-soul">
+        <div class="loading">Loading SOUL.md…</div>
+      </div>
+      <div class="modal-panel" id="panel-env">
+        <div class="loading">Loading .env…</div>
+      </div>
+      <div class="modal-panel" id="panel-meta">
+        <div class="loading">Loading metadata…</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="ghost" id="btnSaveConfig" style="display:none">Save config</button>
+      <button class="ghost" id="btnSaveSoul" style="display:none">Save SOUL.md</button>
+    </div>
+  </div>
+</div>
+
+<!--CK:JS--><script id="city-kit-js">
+/* City kit: shared nav, the "machines" panel (#boxes) and the live city backdrop.
+ * Used by Hermes TV (dashboard.html, dashboard-3d.html); Fleet Control carries an inline copy.
+ *
+ *   CityKit.nav("fleet" | "tv" | "city")         put the shared nav at the top of <body>
+ *   CityKit.renderBoxes(el, boxes)                draw the machines list into #boxes
+ *   CityKit.boxesFromSnapshot(snap, colorOf)      machines from a FleetMerge snapshot (Hermes TV pages)
+ *   CityKit.fetchBoxes()                          machines read straight from Hermes TV (Fleet Control)
+ *   CityKit.backdrop(canvas)                      the live city; returns { setTowers([{id, name, color, h, hot}]) }
+ */
+(function () {
+  "use strict";
+  // The two apps run on neighbouring ports of one host: Fleet Control on 8787, Hermes TV on 8798. A preview server
+  // that shifts both (18787/18798 and so on) keeps the pair, so swap the port's ending rather than hard-coding it.
+  const port = location.port || "";
+  const FLEET_PORT = /8798$/.test(port) ? port.replace(/8798$/, "8787") : /8787$/.test(port) ? port : "8787";
+  const TV_PORT = /8787$/.test(port) ? port.replace(/8787$/, "8798") : /8798$/.test(port) ? port : "8798";
+  const origin = (p) => location.protocol.replace("file:", "http:") + "//" + (location.hostname || "127.0.0.1") + ":" + p;
+  const FLEET_URL = origin(FLEET_PORT) + "/";
+  const TV_BASE = origin(TV_PORT) + "/";
+  const TV_URL = TV_BASE + "dashboard.html";
+  const CITY_URL = TV_BASE + "dashboard-3d.html";
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function nav(page) {
+    const links = [["fleet", FLEET_URL, "Fleet Control", "1"], ["tv", TV_URL, "Hermes TV", "2"], ["city", CITY_URL, "Agent City 3D", "3"]];
+    const el = document.createElement("nav");
+    el.className = "ck-nav" + (page === "city" ? " ck-fixed" : "");
+    el.setAttribute("aria-label", "Hermes apps");
+    el.innerHTML = '<a class="ck-brand" href="' + TV_URL + '"><i></i>HERMES <b>CITY</b></a><div class="ck-tabs">' +
+      links.map(([id, href, label, k]) => '<a href="' + href + '"' + (id === page ? ' aria-current="page"' : "") + ">" + label + ' <span class="k">' + k + "</span></a>").join("") +
+      '</div><span class="ck-grow"></span><span class="ck-clock" id="ckClock"></span>';
+    document.body.prepend(el);
+    const clock = el.querySelector("#ckClock");
+    const tickClock = () => { clock.innerHTML = "<b>" + new Date().toLocaleTimeString("en-GB") + "</b> · " + (location.hostname || "local"); };
+    tickClock(); setInterval(tickClock, 1000);
+    // 1 / 2 / 3 jump between the apps (not while typing).
+    addEventListener("keydown", (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+      const i = ["1", "2", "3"].indexOf(e.key);
+      if (i >= 0 && links[i][0] !== page) location.href = links[i][1];
+    });
+    return el;
+  }
+
+  // ---------------------------------------------------------------- machines
+  const ageOf = (iso) => { const t = Date.parse(iso || ""); return isNaN(t) ? null : Math.max(0, (Date.now() - t) / 1000); };
+  const span = (s) => s == null ? "—" : s < 60 ? Math.round(s) + "s" : s < 3600 ? Math.round(s / 60) + "m" : s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
+  const tok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n || 0);
+
+  // One machine: {id, label, color, ok, local, error, age, agents:[{name, color, tokens, busy}]}
+  function boxesFromSnapshot(snap, colorOf) {
+    const fleets = ((snap && snap.meta && snap.meta.fleets) || []).slice();
+    const agents = (snap && snap.agents) || [];
+    if (!fleets.length) fleets.push({ id: "local", label: "This machine", ok: true, local: true, generated_at: snap && snap.generated_at });
+    const single = fleets.length === 1;
+    return fleets.map((f) => ({
+      id: f.id, label: f.label, color: f.color, ok: !!f.ok, local: !!f.local, error: f.error, age: ageOf(f.generated_at),
+      agents: agents.filter((a) => single || a.hostId === f.id || (!a.hostId && f.local)).map((a) => ({
+        name: a.name, color: colorOf ? colorOf(a) : f.color, tokens: (a.activity && a.activity.tokens_7d) || 0,
+        busy: !!(a.active || (a.activity && (a.activity.running || a.activity.kanban_running))),
+      })),
+    }));
+  }
+
+  function renderBoxes(el, boxes, opts) {
+    if (!el) return;
+    opts = opts || {};
+    if (!boxes || !boxes.length) { el.innerHTML = '<div class="ck-none">' + esc(opts.empty || "No machines reported.") + "</div>"; return; }
+    const on = boxes.filter((b) => b.ok);
+    const sorted = boxes.slice().sort((a, b) => (b.ok - a.ok) || (b.local - a.local) || String(a.label).localeCompare(b.label));
+    el.innerHTML = (opts.title === false ? "" : '<div class="ck-boxes-head"><h2 class="ck-h">Machines</h2><span class="ck-kicker">' + on.length + " of " + boxes.length + " in operation</span></div>") +
+      sorted.map((b) => {
+        if (!b.ok) {
+          return '<div class="ck-box off" title="' + esc(b.error || "not answering") + '"><span class="orb"></span><span class="nm">' + esc(b.label) +
+            '</span><span class="st">offline</span><span class="ln">not answering' + (b.local ? "" : " · its snapshot server is down or the machine is off") + "</span></div>";
+        }
+        const busy = b.agents.filter((a) => a.busy);
+        const top = b.agents.slice().sort((x, y) => y.tokens - x.tokens)[0];
+        const max = Math.max(1, ...b.agents.map((a) => a.tokens));
+        const sky = b.agents.slice().sort((x, y) => y.tokens - x.tokens).slice(0, 24).map((a) =>
+          '<i class="' + (a.busy ? "on" : "") + '" title="' + esc(a.name + " · " + tok(a.tokens) + " tok · 7d" + (a.busy ? " · busy" : "")) +
+          '" style="--b:' + esc(a.color || "") + ";height:" + Math.max(10, Math.round(100 * Math.pow(a.tokens / max, 0.45))) + '%"></i>').join("");
+        return '<div class="ck-box' + (busy.length ? " busy" : "") + '" style="--c:' + esc(b.color || "var(--ck-cyan)") + '"><span class="orb"></span><span class="nm">' + esc(b.label) +
+          '</span><span class="st">' + (busy.length ? busy.length + " busy" : "in operation") + '</span><span class="ln">' +
+          b.agents.length + " bots" + (busy.length ? " · <b>" + esc(busy.map((a) => a.name).slice(0, 3).join(", ")) + "</b> working" : top && top.tokens ? " · busiest <b>" + esc(top.name) + "</b>" : "") +
+          " · snapshot " + span(b.age) + " ago</span>" + (sky ? '<div class="sky">' + sky + "</div>" : "") + "</div>";
+      }).join("");
+  }
+
+  // Fleet Control lives on another port, so it reads the machines straight from Hermes TV (which sends CORS headers).
+  async function getJson(url, ms) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms || 4000);
+    try {
+      const u = new URL(url, TV_BASE); u.searchParams.set("t", Date.now());
+      const r = await fetch(u.href, { cache: "no-store", signal: ctl.signal });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  }
+  const PALETTE = ["#00e5ff", "#ff2bd6", "#39ff14", "#ffb300", "#b026ff", "#33a1ff", "#ff6b00", "#00ffd5"];
+  async function fetchBoxes() {
+    let cfg;
+    try { cfg = await getJson("fleets.json"); } catch (e) { throw new Error("Hermes TV (port " + TV_PORT + ") is not answering"); }
+    const list = [{ id: "local", label: cfg.localLabel || "This machine", url: "snapshot.json", local: true }]
+      .concat((cfg.fleets || []).filter((f) => f && f.url && f.enabled !== false));
+    return Promise.all(list.map(async (f, i) => {
+      const color = f.color || PALETTE[i % PALETTE.length];
+      try {
+        const s = await getJson(f.url);
+        const agents = (s.agents || []).map((a) => ({ name: a.name, color, tokens: (a.activity && a.activity.tokens_7d) || 0,
+          busy: !!(a.active || (a.activity && (a.activity.running || a.activity.kanban_running))) }));
+        return { id: f.id || "local", label: f.label || f.id, color, ok: true, local: !!f.local, age: ageOf(s.generated_at), agents };
+      } catch (e) {
+        return { id: f.id, label: f.label || f.id, color, ok: false, local: !!f.local, error: e.name === "AbortError" ? "timed out" : e.message, agents: [] };
+      }
+    }));
+  }
+
+  // ---------------------------------------------------------------- the live city
+  // A light, data-driven rendition of Agent City: glass towers with neon edges and a glowing core per bot, beams over
+  // busy ones, lightning between towers now and then, circuit traces on the floor and a random wireframe skyline.
+  // 24 fps cap, paused while the tab is hidden, a single still frame when the system asks for reduced motion.
+  function backdrop(canvas) {
+    const api = { towers: [], setTowers(list) { api.towers = list || []; if (api._apply) api._apply(); } };
+    if (!canvas || !/^https?:$/.test(location.protocol)) return api;
+    import("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js").then((THREE) => build(THREE, canvas, api)).catch(() => {});
+    return api;
+  }
+
+  function build(THREE, canvas, api) {
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // No MSAA and at most 1.25x pixels: the canvas fills the whole window and sits under blurred glass, so it is soft anyway.
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "low-power" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.25));
+    const scene = new THREE.Scene();
+    scene.add(new THREE.AmbientLight(0x88ccff, 0.6), new THREE.HemisphereLight(0x66e0ff, 0x100018, 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(30, 60, 20); scene.add(key);
+    scene.background = new THREE.Color(0x00060a);
+    scene.fog = new THREE.FogExp2(0x00121a, 0.0105);
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 600);
+    const add = THREE.AdditiveBlending;
+    const rnd = Math.random;
+
+    // horizon haze
+    const haze = new THREE.Mesh(new THREE.CylinderGeometry(260, 260, 120, 48, 1, true),
+      new THREE.ShaderMaterial({ side: THREE.BackSide, transparent: true, depthWrite: false, fog: false,
+        vertexShader: "varying float vY; void main(){ vY = position.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+        fragmentShader: "varying float vY; void main(){ float k = smoothstep(40.0, -18.0, vY); gl_FragColor = vec4(vec3(0.0,0.30,0.38) * k, 1.0); }" }));
+    haze.position.y = 20; scene.add(haze);
+
+    // floor grid + circuit traces
+    const grid = new THREE.GridHelper(520, 104, 0x0a6b7a, 0x06343d);
+    grid.material.transparent = true; grid.material.opacity = 0.35; grid.material.depthWrite = false; scene.add(grid);
+    const trP = [], trC = [], pal = [0x00e5ff, 0xff2bd6, 0xb026ff, 0x39ff14, 0xffb300].map((c) => new THREE.Color(c));
+    for (let i = 0; i < 70; i++) {
+      let x = (rnd() - 0.5) * 220, z = (rnd() - 0.5) * 220; const col = pal[i % pal.length];
+      for (let s = 0; s < 4; s++) {
+        const horiz = (s + i) % 2 === 0, len = 6 + rnd() * 22, nx = horiz ? x + (rnd() < .5 ? -len : len) : x, nz = horiz ? z : z + (rnd() < .5 ? -len : len);
+        trP.push(x, 0.03, z, nx, 0.03, nz); trC.push(col.r, col.g, col.b, col.r, col.g, col.b); x = nx; z = nz;
+      }
+    }
+    const trG = new THREE.BufferGeometry(); trG.setAttribute("position", new THREE.Float32BufferAttribute(trP, 3)); trG.setAttribute("color", new THREE.Float32BufferAttribute(trC, 3));
+    const traces = new THREE.LineSegments(trG, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22, blending: add, depthWrite: false }));
+    scene.add(traces);
+
+    // random wireframe skyline far out
+    const skP = [], skC = [];
+    for (let i = 0; i < 46; i++) {
+      const a = rnd() * Math.PI * 2, r = 150 + rnd() * 90, x = Math.cos(a) * r, z = Math.sin(a) * r, w = 2 + rnd() * 4, h = 14 + rnd() * 55, col = pal[Math.floor(rnd() * pal.length)];
+      const c = [[-w, -w], [w, -w], [w, w], [-w, w]];
+      for (let k = 0; k < 4; k++) { const [ax, az] = c[k], [bx, bz] = c[(k + 1) % 4]; skP.push(x + ax, 0, z + az, x + ax, h, z + az, x + ax, h, z + az, x + bx, h, z + bz); for (let q = 0; q < 4; q++) skC.push(col.r * .7, col.g * .7, col.b * .7); }
+    }
+    const skG = new THREE.BufferGeometry(); skG.setAttribute("position", new THREE.Float32BufferAttribute(skP, 3)); skG.setAttribute("color", new THREE.Float32BufferAttribute(skC, 3));
+    scene.add(new THREE.LineSegments(skG, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.5, blending: add, depthWrite: false })));
+
+    // glow sprite texture
+    const gc = document.createElement("canvas"); gc.width = gc.height = 64;
+    const g2 = gc.getContext("2d"), grd = g2.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, "rgba(255,255,255,1)"); grd.addColorStop(0.25, "rgba(255,255,255,.55)"); grd.addColorStop(1, "rgba(255,255,255,0)");
+    g2.fillStyle = grd; g2.fillRect(0, 0, 64, 64);
+    const glowTex = new THREE.CanvasTexture(gc);
+
+    // towers
+    const city = new THREE.Group(); scene.add(city);
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), edgeGeo = new THREE.EdgesGeometry(boxGeo);
+    const beamGeo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+    const beamMat = (col) => new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: add, side: THREE.DoubleSide, fog: false,
+      uniforms: { uCol: { value: col }, uT: { value: 0 } },
+      vertexShader: "varying vec2 vU; void main(){ vU = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+      fragmentShader: "uniform vec3 uCol; uniform float uT; varying vec2 vU; void main(){ float x = abs(vU.x-0.5)*2.0; float a = exp(-x*x*9.0) * (1.0-vU.y) * (0.75+0.25*sin(vU.y*40.0-uT*5.0)); gl_FragColor = vec4(mix(uCol, vec3(1.0), 0.45) * a, 1.0); }" });
+    // Towers are keyed by bot id and updated in place on every snapshot poll: same spot, same objects, only the
+    // height, colour and beam change. Bots that leave are disposed. (Rebuilding them each poll moved them around
+    // and leaked GPU memory, which made long-open pages slow.)
+    const towers = new Map();
+    const orbGeo = new THREE.SphereGeometry(0.62, 18, 12);
+    const BOX = 3.2, GAP = 2.4;
+    const jitter = (id, k) => { let h = 2166136261 ^ k; for (const ch of String(id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return ((h >>> 0) / 4294967295 - 0.5) * 0.8; };
+    function makeTower(id) {
+      const g = new THREE.Group();
+      const glass = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.07, blending: add, depthWrite: false }));
+      const edges = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ transparent: true, opacity: 0.85, blending: add, depthWrite: false }));
+      const orb = new THREE.Mesh(orbGeo, new THREE.MeshBasicMaterial());
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, blending: add, depthWrite: false }));
+      const beam = new THREE.Mesh(beamGeo, beamMat(new THREE.Color()));
+      g.add(glass, edges, orb, glow, beam); city.add(g);
+      return { id, g, glass, edges, orb, glow, beam, hot: false, h: 0, seed: rnd() * 10, name: null, file: null, fx: null, seq: 0 };
+    }
+    // Each tower carries its bot's own 3D asset, the same ones as Agent City (assets/enhance.js on the Hermes TV server:
+    // per-bot overrides first, then the name's default). The glowing orb stays until the asset arrives, or if it can't load.
+    let lib = null;
+    import(TV_BASE + "assets/enhance.js").then(async (m) => { await m.loadOverrides(); lib = m; for (const t of towers.values()) loadAsset(t); })
+      .catch((e) => console.warn("[city-kit] assets unavailable:", e.message));
+    async function loadAsset(t) {
+      if (!lib || !t.name) return;
+      // Same choice as Agent City: other machines' bots are keyed by full id ("box2/default"), this machine's by name.
+      const file = (String(t.id).includes("/") && lib.overrides[t.id]) || lib.assetFor(t.name).file;
+      if (file === t.file) return;
+      t.file = file; const seq = ++t.seq;
+      const mod = await lib.loadModule(file);
+      if (seq !== t.seq || !towers.has(t.id) || !mod) return;
+      let fx; try { fx = lib.enhance(THREE, mod, { name: t.name, color: t.orb.material.color.getHex(), state: t.hot ? "active" : "idle" }); } catch (e) { return; }
+      if (t.fx) { t.g.remove(t.fx.group); disposeAsset(t.fx); }
+      t.fx = fx; t.g.add(fx.group);
+      const size = new THREE.Box3().setFromObject(fx.inner).getSize(new THREE.Vector3());
+      fx.group.scale.setScalar(Math.min(6, (BOX * 0.72) / (Math.max(size.x, size.y, size.z) || 1)));
+      fx.group.position.y = t.orb.position.y;
+      t.orb.visible = false; dirty = true;
+    }
+    function disposeAsset(fx) {
+      fx.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); for (const m of [].concat(o.material || [])) if (m.dispose) m.dispose(); });
+    }
+    function disposeTower(t) {
+      city.remove(t.g); t.seq++;
+      [t.glass, t.edges, t.orb, t.glow, t.beam].forEach((m) => m.material.dispose());
+      if (t.fx) disposeAsset(t.fx);
+    }
+    function apply() {
+      const list = api.towers.slice(0, 64);
+      const n = list.length, cols = Math.ceil(Math.sqrt(n || 1)), rows = Math.ceil(n / cols);
+      const keep = new Set();
+      list.forEach((d, i) => {
+        const id = d.id || "t" + i; keep.add(id);
+        let t = towers.get(id); if (!t) { t = makeTower(id); towers.set(id, t); }
+        const r = Math.floor(i / cols), c = i % cols;
+        t.g.position.set((c - (cols - 1) / 2) * (BOX + GAP) + jitter(id, 1), 0, (r - (rows - 1) / 2) * (BOX + GAP) + jitter(id, 2));
+        const col = new THREE.Color(d.color || "#00e5ff"), h = 2.2 + 11 * Math.max(0, Math.min(1, d.h || 0));
+        t.glass.material.color.copy(col); t.edges.material.color.copy(col);
+        t.orb.material.color.copy(col).lerp(new THREE.Color(1, 1, 1), 0.25); t.glow.material.color.copy(col);
+        t.beam.material.uniforms.uCol.value.copy(col);
+        t.glass.scale.set(BOX, h, BOX); t.edges.scale.set(BOX, h, BOX);
+        t.orb.position.y = Math.min(h * 0.5, 2.2); t.glow.position.copy(t.orb.position);
+        t.hot = !!d.hot; t.h = h;
+        if (t.fx) t.fx.group.position.y = t.orb.position.y;
+        if (d.name && d.name !== t.name) { t.name = d.name; loadAsset(t); }
+        t.glow.material.opacity = t.hot ? 0.95 : 0.55; t.glow.scale.setScalar(t.hot ? 7 : 4);
+        t.beam.position.y = h; t.beam.scale.set(BOX * 0.8, 46, 1); t.beam.visible = t.hot;
+      });
+      for (const [id, t] of towers) if (!keep.has(id)) { disposeTower(t); towers.delete(id); }
+      api._radius = Math.max(16, cols * (BOX + GAP) * 0.75);
+      dirty = true;
+      if (still) frame(performance.now());
+    }
+    let dirty = true;
+    api._apply = apply; apply();
+
+    // lightning between two towers now and then
+    const boltMat = new THREE.LineBasicMaterial({ color: 0xd08bff, transparent: true, opacity: 0, blending: add, depthWrite: false });
+    const bolt = new THREE.Line(new THREE.BufferGeometry().setFromPoints(new Array(14).fill(0).map(() => new THREE.Vector3())), boltMat);
+    scene.add(bolt); let boltT = -10;
+    function zap(now) {
+      const all = [...towers.values()]; if (all.length < 2) return;
+      const a = all[Math.floor(rnd() * all.length)], b = all[Math.floor(rnd() * all.length)]; if (a === b) return;
+      const pa = a.g.position.clone().setY(1.6), pb = b.g.position.clone().setY(1.6), pos = bolt.geometry.attributes.position;
+      for (let i = 0; i < 14; i++) { const t = i / 13, p = pa.clone().lerp(pb, t); p.y += Math.sin(t * Math.PI) * 3 + (rnd() - .5) * 1.1; p.x += (rnd() - .5) * .9 * Math.sin(t * Math.PI); p.z += (rnd() - .5) * .9 * Math.sin(t * Math.PI); pos.setXYZ(i, p.x, p.y, p.z); }
+      pos.needsUpdate = true; boltT = now;
+    }
+
+    function size() {
+      const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h;
+      // On wide screens, slide the city right of centre: the page title sits on the left of the open top area.
+      if (w > 1100) camera.setViewOffset(w, h, -w * 0.12, 0, w, h); else camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+      dirty = true;
+      if (still) frame(performance.now());
+    }
+    addEventListener("resize", size); size();
+
+    let last = 0, nextZap = 1500;
+    function frame(now) {
+      const t = now / 1000, R = api._radius || 30;
+      const ang = still ? 0.7 : t * 0.045;
+      camera.position.set(Math.cos(ang) * R * 2.6, R * 0.8 + Math.sin(t * 0.13) * 2, Math.sin(ang) * R * 2.6);
+      camera.lookAt(0, -R * 0.42, 0);   // aim below the city so it rises into the open top of the page
+      for (const tw of towers.values()) {
+        tw.beam.material.uniforms.uT.value = t;
+        tw.beam.rotation.y = Math.atan2(camera.position.x - tw.g.position.x, camera.position.z - tw.g.position.z);
+        if (tw.hot) tw.glow.material.opacity = 0.75 + 0.25 * Math.sin(t * 3 + tw.seed);
+        if (tw.fx) { tw.fx.setState(tw.hot ? "active" : "idle"); tw.fx.animate(t); }
+      }
+      traces.material.opacity = 0.16 + 0.08 * Math.sin(t * 0.7);
+      if (!still && now - boltT > nextZap) { zap(now); nextZap = 2200 + rnd() * 3800; }
+      const bt = (now - boltT) / 1000; boltMat.opacity = bt < 0.5 ? (1 - bt / 0.5) * (0.6 + 0.4 * Math.sin(now * 0.08)) : 0;
+      renderer.render(scene, camera);
+    }
+    if (still) { frame(performance.now()); return; }
+    // Full speed (24 fps) only while the open top of the page shows the city. Once you scroll down into the panels,
+    // the city is only seen blurred through glass, and every new frame makes the browser redo each panel's blur:
+    // drop to 2 fps there. Nothing at all while the tab is hidden.
+    function loop(now) {
+      requestAnimationFrame(loop);
+      if (document.hidden) return;
+      const fps = scrollY < innerHeight * 0.45 ? 24 : 2;
+      if (!dirty && now - last < 1000 / fps) return;
+      last = now; dirty = false; frame(now);
+    }
+    addEventListener("scroll", () => { if (scrollY < innerHeight * 0.45) dirty = true; }, { passive: true });
+    requestAnimationFrame(loop);
+  }
+
+  window.CityKit = { nav, renderBoxes, boxesFromSnapshot, fetchBoxes, backdrop, FLEET_URL, TV_URL, CITY_URL, TV_BASE };
+})();
+</script><!--/CK:JS-->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+// ---------- city: shared nav, machines (read from Hermes TV) and the live backdrop
+CityKit.nav('fleet');
+const CITY = CityKit.backdrop(document.getElementById('ck-city'));
+const LANE_COLORS = {openrouter: '#ff2bd6', nvidia: '#39ff14', groq: '#ffb300', inception: '#33a1ff', anthropic: '#ff6b00', apinex: '#b026ff'};
+const laneColor = (lane) => LANE_COLORS[lane] || ['#00e5ff', '#00ffd5', '#ffe600', '#e100ff'][[...String(lane || '')].reduce((n, c) => n + c.charCodeAt(0), 0) % 4];
+async function loadBoxes() {
+  const el = document.getElementById('boxes');
+  try { CityKit.renderBoxes(el, await CityKit.fetchBoxes()); }
+  catch (e) { CityKit.renderBoxes(el, [], {empty: e.message + ': machines unknown.'}); }
+}
+function renderCity() {
+  if (!STATE) return;
+  // One tower per profile in its main lane's colour; taller with a longer fallback chain; a pending change lights its beam.
+  CITY.setTowers(STATE.profiles.filter(p => !p.error).map(p => ({id: p.profile, name: p.profile, color: laneColor(p.provider),
+    h: 0.25 + 0.75 * Math.min(3, (p.fallbacks || []).length) / 3, hot: !!DIRTY[p.profile]})));
+}
+function renderSpread() {
+  const by = Object.entries(STATE.by_provider || {}).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const total = by.reduce((n, [, v]) => n + v, 0) || 1;
+  $('spread').innerHTML = by.length ? '<div class="ck-kicker" style="margin-bottom:7px">Where the main models route</div><div class="bar">' +
+    by.map(([k, v]) => `<i style="--c:${laneColor(k)};width:${(100 * v / total).toFixed(2)}%" title="${esc(k)}: ${v} profile(s)"></i>`).join('') +
+    '</div><div class="key">' + by.map(([k, v]) => `<span style="--c:${laneColor(k)}">${esc(k)} <b>${v}</b></span>`).join('') + '</div>' : '';
+}
+function applyProfileFilter() {
+  const q = ($('profileFilter').value || '').trim().toLowerCase();
+  let shown = 0, total = 0, keep = true;
+  document.querySelectorAll('#fleet tbody tr').forEach(tr => {
+    if (!tr.classList.contains('detail-row')) {
+      total++;
+      const text = (tr.textContent + ' ' + [...tr.querySelectorAll('select')].map(s => s.value).join(' ')).toLowerCase();
+      keep = !q || text.includes(q); if (keep) shown++;
+    }
+    tr.classList.toggle('hide', !keep);
+  });
+  $('profileCount').textContent = q ? `${shown} of ${total}` : `${total} profiles`;
+}
+document.getElementById('profileFilter').addEventListener('input', applyProfileFilter);
+addEventListener('keydown', e => {
+  if (e.key === '/' && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName)) { e.preventDefault(); document.getElementById('profileFilter').focus(); }
+  if (e.key === 'Escape' && document.getElementById('modalOverlay').classList.contains('open')) closeModal();
+});
+loadBoxes(); setInterval(loadBoxes, 15000);
+
+// ---------- state
+let STATE = null;
+let DIRTY = {};      // profile -> {choice, fallbacks:[lane/model...]}  (ONLY for changed profiles)
+const ORIG = {};     // profile -> {choice, fallbacks}                   (as loaded from disk)
+let MODAL_PROFILE = null;
+
+// ---------- helpers
+const $ = id => document.getElementById(id.replace(/^#/, ''));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const toast = (m, ok = true) => {
+  const t = $('toast'); t.textContent = m; t.style.borderLeftColor = ok ? 'var(--ok)' : 'var(--bad)';
+  t.style.display = 'block'; clearTimeout(t._t); t._t = setTimeout(() => t.style.display = 'none', 5200);
+};
+const fmtT = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
+const choiceOf = (lane, model) => model ? (lane ? `${lane}/${model}` : model) : '';
+
+// health lookup by model slug (health table has lane + model)
+function healthOf(lane, model) {
+  return STATE.health.find(h => h.model === model && (!lane || h.lane === lane)) ||
+         STATE.health.find(h => h.model === model) || null;
+}
+
+function healthBadge(lane, model) {
+  const h = healthOf(lane, model);
+  if (!h) return '<span class="st s-un">no sweep data</span>';
+  const y = h.tools_yes || 0, nn = (h.tools_yes || 0) + (h.tools_no || 0);
+  // A hard failure on the CURRENT sample outranks cumulative tool evidence.
+  // tools_yes is a running tally: a lane that worked yesterday and is blocked
+  // today (402 billing/check-in, 404 dead) still carries tools_yes > 0, and
+  // checking that first painted a dead lane green. http is the live sample.
+  if (h.http === 402) {
+    return `<span class="st s-bad" title="blocked: billing or daily check-in required. Needs a human at ${esc(h.lane || 'the provider')} — this never self-clears.">402 blocked</span>`;
+  }
+  if (h.http === 404) {
+    return `<span class="st s-bad" title="model not found on the provider's live list.">404 dead</span>`;
+  }
+  if (h.http === 429) {
+    return `<span class="st s-warn" title="throttled right now — may recover on its own.">429 throttled</span>`;
+  }
+  if (y > 0) {
+    return `<span class="st s-ok" title="tool call seen in ${y} of ${nn} probes. Read as a tendency, not a verdict.">OK · tools ${y}/${nn}</span>`;
+  }
+  if (h.http === 200) {
+    if (nn > 0) return `<span class="st s-un" title="no tool call in ${nn} probes, but the model answered. Probes are noise - a real tool task is the verdict.">OK · tools 0/${nn}</span>`;
+    return '<span class="st s-un">OK · tools ?</span>';
+  }
+  if (h.http === 403) return '<span class="st s-warn" title="gated to agentic harnesses — Hermes qualifies">403 harness-gated</span>';
+  if (h.http === 404) return '<span class="st s-bad">404 dead</span>';
+  if (h.http === 429) return '<span class="st s-warn">429 throttled</span>';
+  if (h.http) return `<span class="st s-bad">${h.http}</span>`;
+  return '<span class="st s-un">dead/timeout</span>';
+}
+
+// Build the <option> list for one dropdown.
+function buildOptions(current) {
+  const items = STATE.catalog.items || [];
+  const groups = {};
+  items.forEach(it => {
+    const v = choiceOf(it.lane, it.model);
+    (groups[it.lane] = groups[it.lane] || []).push({v, free: it.is_free === 1, model: it.model, live: it.live});
+  });
+  const lanes = Object.keys(groups).sort((a, b) => (a === 'anthropic') - (b === 'anthropic') || a.localeCompare(b));
+  const html = [];
+  if (current && !items.some(it => choiceOf(it.lane, it.model) === current)) {
+    html.push(`<optgroup label="current (not in catalogue)"><option value="${esc(current)}" selected>${esc(current)}</option></optgroup>`);
+  }
+  if (!current) html.push('<option value="">— none —</option>');
+  lanes.forEach(ln => {
+    const lst = groups[ln].slice().sort((a, b) => (b.free - a.free) || a.model.localeCompare(b.model));
+    const stale = lst.some(x => x.live === 0);
+    html.push(`<optgroup label="${esc(ln)}${stale ? ' (stale)' : ''}">`);
+    lst.forEach(x => {
+      const mark = x.free ? '★' : '$';
+      html.push(`<option value="${esc(x.v)}" ${x.v === current ? 'selected' : ''}>${mark} ${esc(x.model)}</option>`);
+    });
+    html.push('</optgroup>');
+  });
+  return html.join('');
+}
+
+// Role tooltip text from ROLES
+function roleTooltip(profile) {
+  const r = STATE.roles[profile];
+  if (!r) return '';
+  const [type, func, brain, advice] = r;
+  return `Function: ${func}\nBrain fit: ${brain}\nAdvice: ${advice}`;
+}
+
+function render() {
+  // ---- alerts
+  const al = [];
+  const dead = new Set(STATE.health.filter(h => h.http === 404).map(h => h.model));
+  const deadProfiles = STATE.profiles.filter(p => dead.has(p.model) || (p.fallbacks || []).some(f => dead.has(f.split('/').slice(1).join('/'))));
+  if (deadProfiles.length) al.push(`<div class="warnbox"><b>${deadProfiles.length} profile(s) point at a model the last sweep says is dead:</b> ${deadProfiles.map(p => '<code>' + esc(p.profile) + '</code>').join(', ')}. Fix in the table below.</div>`);
+  const guardless = STATE.profiles.filter(p => p.provider === 'nvidia' && !p.via_guard);
+  if (guardless.length) al.push(`<div class="warnbox"><b>nvidia provider but NOT routed through nvidia-guard</b> (spends the shared 10k/day pool uncounted): ${guardless.map(p => '<code>' + esc(p.profile) + '</code>').join(', ')}.</div>`);
+  const stale = Object.entries(STATE.catalog.lanes || {}).filter(([, l]) => !l.ok);
+  if (stale.length) al.push(`<div class="warnbox"><b>Catalogue stale for:</b> ${stale.map(([k, l]) => '<code>' + esc(k) + '</code> (' + esc(l.error || 'no data') + ')').join(', ')}. Last-known models kept.</div>`);
+  $('alerts').innerHTML = al.join('');
+
+  // ---- guard status
+  const gs = $('guardStatus');
+  if (STATE.guard_up) {
+    gs.textContent = 'guard: UP';
+    gs.className = 'pill ok';
+  } else {
+    gs.textContent = 'guard: DOWN';
+    gs.className = 'pill bad';
+  }
+
+  // ---- kpis
+  const n = STATE.profiles.length;
+  const orN = STATE.by_provider['openrouter'] || 0;
+  const k = [
+    {n, l: 'profiles'},
+    {n: orN, l: 'on OpenRouter', c: orN / Math.max(n, 1) > 0.5 ? 'var(--bad)' : 'var(--ok)'},
+    {n: STATE.profiles.filter(p => p.via_guard).length, l: 'through nvidia-guard'},
+    {n: (STATE.catalog.items || []).filter(i => i.is_free === 1).length, l: 'free endpoints in catalogue'},
+  ];
+  $('kpis').innerHTML = k.map(x => `<div class="kpi"><div class="n" style="color:${x.c || 'var(--fg)'}">${x.n}</div><div class="l">${x.l}</div></div>`).join('');
+
+  // ---- lanes
+  const tb = document.querySelector('#lanes tbody'); tb.innerHTML = '';
+  Object.entries(STATE.lane_budget).forEach(([lane, b]) => {
+    const cl = (STATE.catalog.lanes || {})[lane];
+    const cat = cl ? (cl.ok ? `${cl.n} models · live` : `<span class="st s-warn">stale · ${cl.n} kept</span>`) : '<span class="muted">—</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><b>${esc(lane)}</b></td><td class="small">${esc(b.free_headroom)}</td>
+      <td class="small muted">${esc(b.bottleneck)}</td><td class="small">${esc(b.quality)}</td><td class="small">${cat}</td>`;
+    tb.appendChild(tr);
+  });
+
+  // ---- profile table (system-bot pinned at top)
+  const fb = document.querySelector('#fleet tbody'); fb.innerHTML = '';
+  
+  // Sort: system-bot first, then default, then rest alphabetically
+  const sortedProfiles = [...STATE.profiles].sort((a, b) => {
+    if (a.profile === 'system-bot') return -1;
+    if (b.profile === 'system-bot') return 1;
+    if (a.profile === 'default') return -1;
+    if (b.profile === 'default') return 1;
+    return a.profile.localeCompare(b.profile);
+  });
+
+  sortedProfiles.forEach(p => {
+    if (p.error) {
+      fb.insertAdjacentHTML('beforeend', `<tr><td><b>${esc(p.profile)}</b></td><td colspan="4" class="small" style="color:var(--bad)">config unreadable: ${esc(p.error)}</td></tr>`);
+      return;
+    }
+    const r = STATE.roles[p.profile] || ['worker', '', '', ''];
+    const cur = [choiceOf(p.provider, p.model), ...(p.fallbacks || []).slice(0, 3)];
+    ORIG[p.profile] = {choice: cur[0], fallbacks: cur.slice(1).filter(Boolean)};
+    const fitCls = r[2] === 'big' ? 's-ok' : r[2] === 'med' ? 's-warn' : 's-un';
+    const isNonChat = p.profile === 'cf-image-gen' || p.profile === 'image-gen';
+    const nonChatCls = isNonChat ? 'non-chat' : '';
+    const pinnedCls = p.profile === 'system-bot' ? 'pinned-row' : '';
+    const tr = document.createElement('tr');
+    tr.className = nonChatCls + ' ' + pinnedCls;
+    const tip = roleTooltip(p.profile);
+    tr.innerHTML = `
+      <td><a class="profile-link has-tooltip" data-profile="${esc(p.profile)}" data-tip="${esc(tip)}"><b>${esc(p.profile)}</b></a>${p.via_guard ? ' <span class="pill ok">guard</span>' : ''}<div>${healthBadge(p.provider, p.model)}</div></td>
+      <td><select data-f="0"></select></td>
+      <td><select data-f="1"></select></td>
+      <td><select data-f="2"></select></td>
+      <td><select data-f="3"></select></td>`;
+    fb.appendChild(tr);
+    // Detail row (collapsible) - enhanced with system prompt summary
+    const detailTr = document.createElement('tr');
+    detailTr.className = 'detail-row ' + nonChatCls;
+    detailTr.style.display = 'none';
+    // Build system prompt summary from profile metadata
+    const soulPreview = (p.soul || '').trim();
+    const hasSoul = soulPreview.length > 0;
+    const toolset = p.toolset || 'safe';
+    const skillsCount = p.skills_count !== undefined ? p.skills_count : '?';
+    const ctxLen = p.context_length ? `${p.context_length.toLocaleString()}` : '—';
+    detailTr.innerHTML = `<td colspan="5"><div class="detail-cell">
+      <span class="label">Function:</span> ${esc(r[1] || '—')}
+      <span class="label" style="margin-left:16px">Brain:</span> <span class="st ${fitCls}">${esc(r[2] || '?')}</span>
+      <span class="label" style="margin-left:16px">Advice:</span> ${esc(r[3] || '—')}
+      <span class="detail-toggle" title="collapse">▲</span>
+      <div class="detail-grid">
+        <div class="detail-item"><span class="label">Toolset:</span> <code>${esc(toolset)}</code></div>
+        <div class="detail-item"><span class="label">Skills:</span> <code>${esc(String(skillsCount))}</code></div>
+        <div class="detail-item"><span class="label">Context window:</span> <code>${esc(ctxLen)}</code></div>
+      </div>
+      ${hasSoul ? `<div class="detail-item" style="grid-column:1/-1"><span class="label">SOUL.md preview (full content):</span>
+        <div class="detail-soul-preview">${esc(soulPreview)}</div></div>` : ''}
+    </div></td>`;
+    fb.appendChild(detailTr);
+    // Click handler to toggle detail row
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', (e) => {
+      if (e.target.tagName === 'SELECT' || e.target.tagName === 'A') return;
+      const open = detailTr.style.display !== 'none';
+      detailTr.style.display = open ? 'none' : 'table-row';
+      tr.querySelector('.detail-toggle').textContent = open ? '▼' : '▲';
+    });
+    // Click on profile name -> open modal
+    tr.querySelector('.profile-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openModal(p.profile);
+    });
+    tr.querySelectorAll('select').forEach((s, i) => {
+      s.innerHTML = buildOptions(cur[i] || '');
+      s.addEventListener('change', () => {
+        const d = DIRTY[p.profile] || {choice: ORIG[p.profile].choice, fallbacks: [...ORIG[p.profile].fallbacks]};
+        const sels = [...tr.querySelectorAll('select')].map(x => x.value);
+        d.choice = sels[0];
+        d.fallbacks = [...sels.slice(1).filter(Boolean), ...ORIG[p.profile].fallbacks.slice(3)];
+        const same = d.choice === ORIG[p.profile].choice &&
+                     JSON.stringify(d.fallbacks) === JSON.stringify(ORIG[p.profile].fallbacks);
+        if (same) delete DIRTY[p.profile]; else DIRTY[p.profile] = d;
+        tr.querySelectorAll('select').forEach((x, j) => x.classList.toggle('dirty', !!DIRTY[p.profile] && x.value !== [ORIG[p.profile].choice, ...ORIG[p.profile].fallbacks][j]));
+        renderSticky();
+      });
+    });
+  });
+
+  $('ext').innerHTML = STATE.external.map(e =>
+    `<div class="ext"><div class="nm">${esc(e.name)} <span class="muted small">— ${esc(e.what)}</span></div>
+     <div class="small" style="margin:3px 0"><b>Best for:</b> ${esc(e.best_for)}</div>
+     <div class="small" style="color:var(--warn)"><b>Catch:</b> ${esc(e.catch)}</div></div>`).join('');
+
+  const ts = [...STATE.health.map(h => h.checked_at), ...Object.values(STATE.catalog.lanes || {}).map(l => l.checked_at)];
+  $('stamp').textContent = 'last sweep ' + fmtT(Math.max(0, ...ts)) + ' · ' + n + ' profiles · ' + (STATE.catalog.items || []).length + ' catalogue entries';
+  renderSpread(); renderCity(); applyProfileFilter();
+}
+
+function renderSticky() {
+  const ks = Object.keys(DIRTY);
+  $('sticky').classList.toggle('on', ks.length > 0);
+  $('dirtyCount').textContent = ks.length;
+  $('dirtyNames').textContent = ks.join(', ');
+  $('btnApply').disabled = !ks.length;
+  $('planOut').innerHTML = ks.length ? '<span class="muted small">Pending changes — press Preview to see the exact diff.</span>' : '<span class="muted small">No changes previewed yet.</span>';
+  renderCity();
+}
+
+const post = async (u, b, method='POST') => (await fetch(u, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)})).json();
+
+$('btnPlan').onclick = async () => {
+  if (!Object.keys(DIRTY).length) return toast('Nothing pending.');
+  const r = await post('/api/plan', {changes: DIRTY});
+  if (!r.diffs || !r.diffs.length) {
+    $('planOut').innerHTML = '<div class="okbox">No differences — the configs already match your selection.</div>';
+    return;
+  }
+  const lines = r.diffs.map(d => d.profile + (d.error ? '  ERROR: ' + d.error : '') + '\n' +
+    (d.changes || []).map(c => '  ' + c.field + ':\n    - ' + JSON.stringify(c.from ?? '(unset)') + '\n    + ' + JSON.stringify(c.to ?? '(unset)')).join('\n'));
+  $('planOut').innerHTML = `<div class="${r.note && r.note.includes('WARNING') ? 'warnbox' : 'warnbox'}"><b>${esc(r.note)}</b></div><pre>${esc(lines.join('\n'))}</pre>`;
+  $('planOut').scrollIntoView({behavior: 'smooth'});
+};
+
+const doApply = async () => {
+  const names = Object.keys(DIRTY);
+  if (!names.length) return;
+  if (!confirm('Apply these changes to ' + names.length + ' profile config(s)?\n\n' + names.join(', ') +
+               '\n\nEach file is backed up to fleet-dashboard/backups first.')) return;
+  const r = await post('/api/apply', {apply: true, changes: DIRTY});
+  if (r.error) return toast(r.error, false);
+  const wired = (r.wired || []).map(w => w.profile + ': ' + w.wired.join(', ')).join(' | ');
+  toast('Applied: ' + (r.applied || []).join(', ') + (wired ? ' · auto-wired ' + wired : '') +
+        (r.failed && r.failed.length ? ' | SKIPPED: ' + r.failed.map(f => f.profile + ' (' + f.error + ')').join('; ') : ''),
+        !(r.failed && r.failed.length));
+  DIRTY = {}; renderSticky(); load(); loadWiring();
+  if ((r.applied || []).length) {
+    const gw = r.gateway || {};
+    const msg = 'Changes are on disk. The gateway must restart to pick them up (this restarts ALL bots).\n\n' +
+      (gw.busy ? 'The gateway looks BUSY right now' + (gw.sessions && gw.sessions.length ? ' (' + gw.sessions.join(', ') + ')' : '') +
+                 '.\nOK = restart automatically as soon as it is idle (waits up to 30 min).'
+               : 'It looks idle.\nOK = restart now.') + '\nCancel = leave it, restart later from the Wiring & gateway panel.';
+    if (confirm(msg)) gwRestart(gw.busy ? 'when-idle' : 'now');
+  }
+};
+$('btnApply').onclick = doApply;
+$('btnApply2').onclick = doApply;
+$('btnReset').onclick = () => { DIRTY = {}; renderSticky(); load(); };
+$('btnRefresh').onclick = async () => {
+  toast('Pulling the live catalogue…');
+  const r = await post('/api/refresh', {});
+  if (r.error) return toast('Refresh failed: ' + r.error, false);
+  if (r.catalogue && r.catalogue.error) return toast('Catalogue failed: ' + r.catalogue.error, false);
+  const lanes = r.catalogue || {};
+  const summary = Object.keys(lanes).map(k => k + ' ' + lanes[k]).join(' · ');
+  toast('Catalogue updated — ' + summary + '. Health sweep running in the background (~6 min).');
+  load();
+};
+
+// Modal functions
+function openModal(profile) {
+  MODAL_PROFILE = profile;
+  $('modalTitle').textContent = profile;
+  $('panel-config').innerHTML = '<div class="loading">Loading config…</div>';
+  $('panel-soul').innerHTML = '<div class="loading">Loading SOUL.md…</div>';
+  $('panel-env').innerHTML = '<div class="loading">Loading .env…</div>';
+  $('panel-meta').innerHTML = '<div class="loading">Loading metadata…</div>';
+  $('btnSaveConfig').style.display = 'none';
+  $('btnSaveSoul').style.display = 'none';
+  // Switch to config tab
+  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.modal-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector('[data-tab="config"]').classList.add('active');
+  $('#panel-config').classList.add('active');
+  $('btnSaveConfig').style.display = 'inline-block';
+  $('modalOverlay').classList.add('open');
+  // Load all data
+  fetch('/api/profile/' + encodeURIComponent(profile))
+    .then(r => r.json())
+    .then(d => {
+      $('#panel-config').innerHTML = `<textarea id="configArea" spellcheck="false">${esc(d.config)}</textarea>`;
+      // Render SOUL.md as markdown with toolbar and search
+      const soulHtml = d.soul && d.soul.trim() ? marked.parse(d.soul) : '<div class="muted" style="padding:20px">No SOUL.md content</div>';
+      $('#panel-soul').innerHTML = `
+        <div class="soul-toolbar">
+          <input type="text" class="soul-search" id="soulSearch" placeholder="Search SOUL.md…" aria-label="Search SOUL.md">
+          <button class="ghost" id="soulViewRaw" style="font-size:11px">View raw</button>
+        </div>
+        <div class="soul-rendered" id="soulRendered">${soulHtml}</div>
+        <textarea id="soulArea" spellcheck="false" style="display:none">${esc(d.soul)}</textarea>
+      `;
+      // Add search functionality
+      const searchInput = $('#soulSearch');
+      const rendered = $('#soulRendered');
+      const rawArea = $('#soulArea');
+      let viewRaw = false;
+      searchInput.addEventListener('input', () => {
+        const term = searchInput.value.toLowerCase();
+        if (!term) {
+          rendered.innerHTML = soulHtml;
+          return;
+        }
+        // Highlight matches
+        const walker = document.createTreeWalker(rendered, NodeFilter.SHOW_TEXT, null, false);
+        const matches = [];
+        let node;
+        while (node = walker.nextNode()) {
+          if (node.textContent.toLowerCase().includes(term)) {
+            matches.push(node);
+          }
+        }
+        // Simple highlight by re-rendering with mark
+        if (matches.length) {
+          let html = d.soul;
+          const regex = new RegExp(`(${esc(term)})`, 'gi');
+          html = html.replace(regex, '<mark style="background:var(--warn);color:#00060a;padding:0 2px;border-radius:2px">$1</mark>');
+          rendered.innerHTML = marked.parse(html);
+          // Scroll to first match
+          const firstMark = rendered.querySelector('mark');
+          if (firstMark) firstMark.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+      });
+      $('#soulViewRaw').addEventListener('click', () => {
+        viewRaw = !viewRaw;
+        rendered.style.display = viewRaw ? 'none' : 'block';
+        rawArea.style.display = viewRaw ? 'block' : 'none';
+        searchInput.style.display = viewRaw ? 'none' : 'block';
+        $('#soulViewRaw').textContent = viewRaw ? 'View rendered' : 'View raw';
+      });
+      $('#panel-env').innerHTML = `<pre>${esc(d.env)}</pre>`;
+      // Populate Meta panel
+      const toolset = d.toolset || 'safe';
+      const skillsCount = d.skills_count !== undefined ? d.skills_count : '?';
+      const ctxLen = d.context_length ? `${d.context_length.toLocaleString()}` : '—';
+      const provider = d.provider || '—';
+      const lane = d.lane || '—';
+      $('#panel-meta').innerHTML = `
+        <div class="meta-grid">
+          <div class="meta-card"><span class="label">Profile</span><div class="value"><code>${esc(profile)}</code></div></div>
+          <div class="meta-card"><span class="label">Provider</span><div class="value"><code>${esc(provider)}</code></div></div>
+          <div class="meta-card"><span class="label">Lane</span><div class="value"><code>${esc(lane)}</code></div></div>
+          <div class="meta-card"><span class="label">Toolset</span><div class="value"><code>${esc(toolset)}</code></div></div>
+          <div class="meta-card"><span class="label">Skills installed</span><div class="value"><code>${esc(String(skillsCount))}</code></div></div>
+          <div class="meta-card"><span class="label">Context window</span><div class="value"><code>${esc(ctxLen)}</code></div></div>
+        </div>
+      `;
+      $('btnSaveConfig').style.display = 'inline-block';
+      $('btnSaveSoul').style.display = 'inline-block';
+    })
+    .catch(e => {
+      $('#panel-config').innerHTML = `<div class="warnbox">Error loading: ${esc(e.message)}</div>`;
+      $('#panel-soul').innerHTML = `<div class="warnbox">Error loading: ${esc(e.message)}</div>`;
+      $('#panel-env').innerHTML = `<div class="warnbox">Error loading: ${esc(e.message)}</div>`;
+      $('#panel-meta').innerHTML = `<div class="warnbox">Error loading: ${esc(e.message)}</div>`;
+    });
+}
+
+function closeModal() {
+  $('modalOverlay').classList.remove('open');
+  MODAL_PROFILE = null;
+}
+
+function init() {
+  // Modal event handlers
+  const modalClose = $('modalClose');
+  const modalOverlay = $('modalOverlay');
+  if (modalClose) modalClose.onclick = closeModal;
+  if (modalOverlay) modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
+
+  // Tab switching
+  document.querySelectorAll('.modal-tab').forEach(tab => {
+    tab.onclick = () => {
+      document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.modal-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      $('#panel-' + tab.dataset.tab).classList.add('active');
+      const isConfig = tab.dataset.tab === 'config';
+      const isSoul = tab.dataset.tab === 'soul';
+      $('btnSaveConfig').style.display = isConfig ? 'inline-block' : 'none';
+      $('btnSaveSoul').style.display = isSoul ? 'inline-block' : 'none';
+    };
+  });
+
+  // Save config
+  const btnSaveConfig = $('btnSaveConfig');
+  if (btnSaveConfig) {
+    btnSaveConfig.onclick = async () => {
+      const config = $('#configArea').value;
+      const r = await post('/api/profile/' + encodeURIComponent(MODAL_PROFILE) + '/config', {config}, 'PUT');
+      if (r.ok) {
+        toast('Saved config.yaml (backup: ' + r.backup + ')' + (r.wired && r.wired.length ? ' · auto-wired: ' + r.wired.join(', ') : '') + (r.unwired && r.unwired.length ? ' · NOT wired: ' + r.unwired.join(', ') : ''), !(r.unwired && r.unwired.length));
+        loadWiring();
+        load();
+      } else {
+        toast('Save failed: ' + r.error, false);
+      }
+    };
+  }
+
+  // Save SOUL.md
+  const btnSaveSoul = $('btnSaveSoul');
+  if (btnSaveSoul) {
+    btnSaveSoul.onclick = async () => {
+      const soul = $('#soulArea').value;
+      const r = await post('/api/profile/' + encodeURIComponent(MODAL_PROFILE) + '/soul', {soul}, 'PUT');
+      if (r.ok) {
+        toast('Saved SOUL.md');
+      } else {
+        toast('Save failed: ' + r.error, false);
+      }
+    };
+  }
+
+  // Sticky bar buttons
+  $('btnApply').onclick = doApply;
+  $('btnApply2').onclick = doApply;
+  $('btnReset').onclick = () => { DIRTY = {}; renderSticky(); load(); };
+  $('btnRefresh').onclick = async () => {
+    toast('Pulling the live catalogue…');
+    const r = await post('/api/refresh', {});
+    if (r.error) return toast('Refresh failed: ' + r.error, false);
+    if (r.catalogue && r.catalogue.error) return toast('Catalogue failed: ' + r.catalogue.error, false);
+    const lanes = r.catalogue || {};
+    const summary = Object.keys(lanes).map(k => k + ' ' + lanes[k]).join(' · ');
+    toast('Catalogue updated — ' + summary + '. Health sweep running in the background (~6 min).');
+    load();
+  };
+}
+
+async function load() {
+  STATE = await (await fetch('/api/state')).json();
+  render();
+  renderSticky();
+}
+
+async function loadWiring() {
+  const r = await (await fetch('/api/wiring')).json();
+  const rows = [];
+  let fixable = 0;
+  for (const [prof, v] of Object.entries(r)) for (const g of (v.gaps || [])) {
+    if (g.fixable) fixable++;
+    rows.push(`<div class="wire-row"><span class="p">${esc(prof)}</span><span class="l">${esc(g.lane)}</span>` +
+      `<span class="pill ${g.fixable ? 'warn' : 'bad'}">${g.kind === 'key' ? 'no key' : 'no stanza'}</span>` +
+      `<span class="muted">${esc(g.detail)}</span></div>`);
+  }
+  $('wireOut').innerHTML = rows.length ? rows.join('') :
+    '<span style="color:var(--ok)">All wired - every main and fallback lane has its stanza and key.</span>';
+  $('wirePill').className = 'pill ' + (rows.length ? 'warn' : 'ok');
+  $('wirePill').textContent = rows.length ? `wiring: ${rows.length} gap(s)` : 'wiring: ok';
+  $('btnWireFix').style.display = fixable ? 'inline-block' : 'none';
+  $('btnWireFix').textContent = `Fix ${fixable} gap(s)`;
+}
+
+function renderGateway(g) {
+  const rs = g.restart || {};
+  const waiting = rs.state === 'waiting';
+  const busy = g.busy ? `busy${g.sessions.length ? ' (' + g.sessions.join(', ') + ')' : ''}` : 'idle';
+  $('gwPill').className = 'pill ' + (g.busy ? 'warn' : 'ok');
+  $('gwPill').textContent = 'gateway: ' + (waiting ? 'restart queued' : busy);
+  const last = rs.state && rs.state !== 'idle' ? ` · last restart: ${rs.state}${rs.note ? ' - ' + rs.note.split('\n').pop() : ''}` : '';
+  $('gwText').textContent = `gateway (all bots share one): ${busy}` +
+    (g.log_age_s != null ? ` · last log ${g.log_age_s}s ago` : '') + (waiting ? ' · will restart when idle' : '') + last;
+  $('btnGwCancel').style.display = waiting ? 'inline-block' : 'none';
+  $('btnGwIdle').disabled = waiting;
+}
+
+async function loadGateway() { renderGateway(await (await fetch('/api/gateway')).json()); }
+
+async function gwRestart(mode) {
+  if (mode === 'now' && !confirm('Restart the gateway now? Every bot drops whatever it is doing.')) return;
+  renderGateway(await post('/api/gateway/restart', {mode}));
+  toast(mode === 'now' ? 'Gateway restarting…' : mode === 'cancel' ? 'Restart cancelled' : 'Gateway will restart as soon as it is idle');
+}
+
+$('btnWireFix').onclick = async () => {
+  const r = await post('/api/wiring/fix', {});
+  const fixed = Object.entries(r).flatMap(([p, v]) => (v.fixed || []).map(g => p + ' ' + g.lane));
+  toast('Wired: ' + (fixed.join(', ') || 'nothing') + ' · backups in fleet-dashboard/backups. Restart the gateway to pick it up.');
+  loadWiring();
+};
+$('btnGwNow').onclick = () => gwRestart('now');
+$('btnGwIdle').onclick = () => gwRestart('when-idle');
+$('btnGwCancel').onclick = () => gwRestart('cancel');
+setInterval(loadGateway, 10000);
+
+// Auto-refresh catalogue on page load
+(async () => {
+  try {
+    const r = await post('/api/refresh', {});
+    if (!r.error && r.catalogue && !r.catalogue.error) {
+      const lanes = r.catalogue || {};
+      const summary = Object.keys(lanes).map(k => k + ' ' + lanes[k]).join(' · ');
+      toast('Catalogue auto-refreshed — ' + summary);
+    }
+  } catch (e) {
+    console.warn('Auto-refresh failed:', e);
+  }
+  load();
+  init();
+  loadWiring();
+  loadGateway();
+})();
+</script>
+</body>
+</html>
