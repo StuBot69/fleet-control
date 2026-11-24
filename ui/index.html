@@ -156,6 +156,25 @@ body.ck { margin: 0; background: transparent; color: var(--ck-text); font: 12.5p
   .side{position:sticky;top:calc(var(--ck-nav-h) + 14px)}
   .card{padding:16px 18px}
   .card.flush{padding:6px 12px 10px}
+  /* Reply times: one row per model, a sparkline on a shared log scale */
+  .lat-note{margin:-4px 0 10px;line-height:1.55}
+  .lat-toggle{display:flex;align-items:center;gap:6px;cursor:pointer}
+  .lat-fail-key{color:var(--ck-red);font-weight:700}
+  #latTable{width:100%;border-collapse:collapse}
+  #latTable th,#latTable td{padding:5px 8px;border-bottom:1px solid rgba(0,229,255,.08);vertical-align:middle}
+  #latTable th{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ck-mut);font-weight:600;text-align:left}
+  #latTable .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #latTable td.mdl{max-width:300px}
+  #latTable td.mdl b{color:var(--ck-hot);font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #latTable td.mdl small{color:var(--ck-mut);letter-spacing:.06em}
+  #latTable tr.idle td{opacity:.55}
+  #latTable td.spark{width:200px;padding-top:2px;padding-bottom:2px}
+  #latTable svg{display:block;width:200px;height:30px;overflow:visible}
+  #latTable .slow{color:var(--ck-amber)}
+  #latTable .bad{color:var(--ck-red)}
+  .lat-tip{position:fixed;z-index:60;pointer-events:none;padding:7px 10px;border-radius:6px;font-size:11px;line-height:1.5;
+    background:var(--ck-glass-solid);border:1px solid var(--ck-edge-hi);color:var(--ck-text);box-shadow:0 8px 24px rgba(0,0,0,.5);white-space:nowrap}
+  .lat-tip b{color:var(--ck-hot)}
   .head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
   h2.ck-h{font-size:11px}
   /* alerts */
@@ -335,6 +354,21 @@ body.ck { margin: 0; background: transparent; color: var(--ck-text); font: 12.5p
         <table id="lanes"><thead><tr>
           <th>Lane</th><th>Free headroom</th><th>Bottleneck</th><th>Quality</th><th>Catalogue</th>
         </tr></thead><tbody></tbody></table>
+      </section>
+      <section class="ck-glass card" id="latCard" style="--ck-rim: var(--ck-cyan)">
+        <div class="head">
+          <h2 class="ck-h">Reply times</h2>
+          <span class="ck-kicker" id="latSub">last 30 days</span>
+          <span class="grow"></span>
+          <label class="small muted lat-toggle"><input type="checkbox" id="latAll"> models not in use</label>
+        </div>
+        <p class="small muted lat-note">One row per model, slowest first. Each dot is one probe from a health sweep or a latency check
+          (<code>refresh.py --latency</code>); trend lines share one log scale, 1&nbsp;s to 5&nbsp;min, so rows compare directly.
+          <span class="lat-fail-key">✕</span> = the probe failed (error or timeout). Hover a trend for details.</p>
+        <table id="latTable"><thead><tr>
+          <th>Model</th><th class="num">Last</th><th class="num">Typical</th><th class="num">Slowest</th><th class="num">Failed</th><th>Trend</th>
+        </tr></thead><tbody><tr><td colspan="6" class="muted small">loading…</td></tr></tbody></table>
+        <div id="latTip" class="lat-tip" role="tooltip" hidden></div>
       </section>
     </div>
     <div class="col side">
@@ -1249,7 +1283,7 @@ async function loadWiring() {
   for (const [prof, v] of Object.entries(r)) for (const g of (v.gaps || [])) {
     if (g.fixable) fixable++;
     rows.push(`<div class="wire-row"><span class="p">${esc(prof)}</span><span class="l">${esc(g.lane)}</span>` +
-      `<span class="pill ${g.fixable ? 'warn' : 'bad'}">${g.kind === 'key' ? 'no key' : 'no stanza'}</span>` +
+      `<span class="pill ${g.fixable ? 'warn' : 'bad'}">${g.kind === 'key' ? 'no key' : g.kind === 'custom' ? 'custom route' : 'no stanza'}</span>` +
       `<span class="muted">${esc(g.detail)}</span></div>`);
   }
   $('wireOut').innerHTML = rows.length ? rows.join('') :
@@ -1274,6 +1308,72 @@ function renderGateway(g) {
 }
 
 async function loadGateway() { renderGateway(await (await fetch('/api/gateway')).json()); }
+
+// ---------------------------------------------------------------- reply times
+// One row per model; the sparkline shares a log scale (1 s .. 5 min) across rows so they compare directly.
+// Time runs left to right over the whole window, so gaps between probes show as gaps.
+let LAT = null;
+const LAT_W = 200, LAT_H = 30, LAT_LO = Math.log(1), LAT_HI = Math.log(300);
+const fmtSec = (s) => s == null ? '–' : s >= 60 ? (s / 60).toFixed(s >= 600 ? 0 : 1) + ' min' : (s >= 10 ? Math.round(s) : s.toFixed(1)) + ' s';
+const latOk = (p) => p[1] != null && p[2] === 200;
+const latY = (s) => { const v = (Math.log(Math.max(1, Math.min(300, s))) - LAT_LO) / (LAT_HI - LAT_LO); return (LAT_H - 4) - v * (LAT_H - 8); };
+function median(a) { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+
+function renderLatency() {
+  if (!LAT) return;
+  const now = Date.now() / 1000, t0 = LAT.since, span = Math.max(1, now - t0);
+  const x = (t) => 2 + (LAT_W - 4) * (t - t0) / span;
+  const showAll = $('latAll').checked;
+  const rows = LAT.models.filter(m => showAll || m.in_use).map(m => {
+    const ok = m.samples.filter(latOk).map(p => p[1]);
+    return { m, ok, typ: median(ok), last: m.samples[m.samples.length - 1], fails: m.samples.length - ok.length };
+  }).sort((a, b) => (b.typ ?? 1e9) - (a.typ ?? 1e9));
+  $('latSub').textContent = `last ${Math.round(span / 86400)} days · ${rows.length} model${rows.length === 1 ? '' : 's'}`;
+  if (!rows.length) {
+    $('latTable').tBodies[0].innerHTML = '<tr><td colspan="6" class="muted small">No samples yet. They build up with every health sweep and latency check.</td></tr>';
+    return;
+  }
+  $('latTable').tBodies[0].innerHTML = rows.map((r, i) => {
+    const pts = r.m.samples.filter(latOk);
+    const line = pts.length > 1 ? `<polyline points="${pts.map(p => x(p[0]).toFixed(1) + ',' + latY(p[1]).toFixed(1)).join(' ')}" fill="none" stroke="var(--ck-mut)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` : '';
+    const dots = pts.map((p, j) => `<circle cx="${x(p[0]).toFixed(1)}" cy="${latY(p[1]).toFixed(1)}" r="${j === pts.length - 1 ? 3 : 1.6}" fill="${j === pts.length - 1 ? 'var(--ck-cyan)' : 'var(--ck-mut)'}"/>`).join('');
+    const fails = r.m.samples.filter(p => !latOk(p)).map(p => `<text x="${x(p[0]).toFixed(1)}" y="7" text-anchor="middle" font-size="9" font-weight="700" fill="var(--ck-red)">✕</text>`).join('');
+    const lastOk = r.last && latOk(r.last);
+    const lastCls = !lastOk ? 'bad' : r.last[1] >= 60 ? 'slow' : '';
+    const slowest = r.ok.length ? Math.max(...r.ok) : null;
+    return `<tr class="${r.m.in_use ? '' : 'idle'}"><td class="mdl"><b title="${esc(r.m.lane + '/' + r.m.model)}">${esc(r.m.model)}</b><small>${esc(r.m.lane)}${r.m.in_use ? '' : ' · not in use'}</small></td>` +
+      `<td class="num ${lastCls}">${lastOk ? fmtSec(r.last[1]) : 'failed'}</td>` +
+      `<td class="num ${r.typ >= 60 ? 'slow' : ''}">${fmtSec(r.typ)}</td>` +
+      `<td class="num">${fmtSec(slowest)}</td>` +
+      `<td class="num ${r.fails ? 'bad' : ''}">${r.fails}/${r.m.samples.length}</td>` +
+      `<td class="spark"><svg data-i="${i}" viewBox="0 0 ${LAT_W} ${LAT_H}" aria-label="${esc(r.m.model)} reply times">` +
+      `<line x1="0" x2="${LAT_W}" y1="${latY(60).toFixed(1)}" y2="${latY(60).toFixed(1)}" stroke="rgba(255,179,0,.25)" stroke-dasharray="2 3"/>` +
+      `${line}${dots}${fails}<rect width="${LAT_W}" height="${LAT_H}" fill="transparent"/></svg></td></tr>`;
+  }).join('');
+  // Hover: the nearest probe in time to the pointer.
+  $('latTable').tBodies[0].querySelectorAll('svg').forEach((svg) => {
+    const r = rows[+svg.dataset.i];
+    svg.onmousemove = (e) => {
+      const b = svg.getBoundingClientRect(), t = t0 + ((e.clientX - b.left) / b.width * LAT_W - 2) / (LAT_W - 4) * span;
+      const p = r.m.samples.reduce((best, q) => Math.abs(q[0] - t) < Math.abs(best[0] - t) ? q : best, r.m.samples[0]);
+      const when = new Date(p[0] * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const what = latOk(p) ? `<b>${fmtSec(p[1])}</b>` : `<b style="color:var(--ck-red)">failed</b> ${p[2] ? 'HTTP ' + p[2] : ''} ${esc((p[4] || '').slice(0, 60))}`;
+      const tip = $('latTip');
+      tip.innerHTML = `${esc(r.m.model)}<br>${when} · ${what}<br><span class="muted">${p[3] === 'latency' ? 'latency check' : p[3] === 'full' ? 'health sweep (tool call)' : 'health sweep'}</span>`;
+      tip.hidden = false;
+      tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+      tip.style.top = (e.clientY - tip.offsetHeight - 10) + 'px';
+    };
+    svg.onmouseleave = () => { $('latTip').hidden = true; };
+  });
+}
+async function loadLatency() {
+  try { LAT = await (await fetch('/api/latency?days=30')).json(); renderLatency(); }
+  catch (e) { $('latTable').tBodies[0].innerHTML = '<tr><td colspan="6" class="muted small">Could not load reply times.</td></tr>'; }
+}
+$('latAll').onchange = renderLatency;
+loadLatency();
+setInterval(loadLatency, 5 * 60 * 1000);
 
 async function gwRestart(mode) {
   if (mode === 'now' && !confirm('Restart the gateway now? Every bot drops whatever it is doing.')) return;

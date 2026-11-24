@@ -215,8 +215,51 @@ def conn():
       lane TEXT, used INT, limit_val INT, checked_at INT, PRIMARY KEY(lane));
     CREATE TABLE IF NOT EXISTS history(
       id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, payload TEXT, at INT);
+    -- Every probe, kept (health only holds the latest per model), so reply-time trends can be charted.
+    -- mode: full = sweep with forced tool call, quick = sweep without tools, latency = --latency spot check.
+    CREATE TABLE IF NOT EXISTS latency_samples(
+      lane TEXT, model TEXT, http INT, lat REAL, err TEXT, mode TEXT, at INT);
+    CREATE INDEX IF NOT EXISTS latency_samples_model_at ON latency_samples(lane, model, at);
     """)
     return c
+
+
+def record_samples(c, rows, mode):
+    """rows: (lane, model, http, lat, err, at). Skips lanes that were never probed (no key)."""
+    c.executemany("INSERT INTO latency_samples(lane,model,http,lat,err,mode,at) VALUES(?,?,?,?,?,?,?)",
+                  [(lane, model, http, lat, (err or None) and err[:200], mode, at)
+                   for lane, model, http, lat, err, at in rows if err != "no key for lane"])
+
+
+def in_use_models():
+    """(lane, model) for every main model and fallback rung any profile routes to, in fleet order."""
+    import wiring
+    seen = []
+    for prof in wiring.all_profiles():
+        d = wiring.load_cfg(prof)
+        m = d.get("model") or {}
+        pairs = [(m.get("provider"), m.get("default") or m.get("model"))]
+        pairs += [(f.get("provider"), f.get("model")) for f in d.get("fallback_providers") or [] if isinstance(f, dict)]
+        for lane, model in pairs:
+            if lane and model and (lane, model) not in seen:
+                seen.append((lane, model))
+    return seen
+
+
+def latency_check(c, keys):
+    """--latency: one plain request to each in-use model on a lane we can probe; writes samples only."""
+    now = int(time.time())
+    rows = []
+    for lane, model in in_use_models():
+        if lane not in LANES or lane not in keys:
+            continue
+        r = probe(lane, model, keys[lane], with_tools=False)
+        rows.append((lane, model, r["http"], r["lat"], r["err"], now))
+        print(f"{lane:11} {model:52} http={r['http']} lat={r['lat']} {r['err'] or ''}"[:150])
+        time.sleep(1.2)                      # stay well under 40 rpm
+    record_samples(c, rows, "latency")
+    c.commit()
+    print(f"\nrecorded {len(rows)} latency samples")
 
 
 def prune_orphan_health(c, candidates):
@@ -345,6 +388,9 @@ def main():
     keys = load_keys()
     c = conn()
     now = int(time.time())
+    if "--latency" in argv:
+        latency_check(c, keys)
+        return
 
     # CATALOGUE FIRST. The dropdowns the user actually looks at are fed by the
     # catalogue, and the health sweep's candidate list is read FROM the
@@ -412,6 +458,8 @@ def main():
             "INSERT OR REPLACE INTO health(lane,model,is_free,note,http,lat,tools,err,"
             "checked_at,runs,tools_yes,tools_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (lane, model, is_free, note, http, lat, tools, err, _ts, runs, yes, no))
+    record_samples(c, [(lane, model, http, lat, err, _ts) for lane, model, _f, _n, http, lat, _t, err, _ts in rows],
+                   "quick" if quick else "full")
     c.execute("INSERT INTO history(kind,payload,at) VALUES(?,?,?)",
               ("refresh", json.dumps({"n": len(rows), "quick": quick}), now))
     c.commit()

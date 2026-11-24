@@ -451,6 +451,35 @@ def _pid_alive(pid):
         return False
 
 
+def latency_history(days=30):
+    """Reply-time samples per model over the last `days` (read-only), in-use models first.
+    -> {"since", "models": [{lane, model, in_use, samples: [[at, lat|null, http|null, mode, err|null], ...]}]}"""
+    since = int(time.time()) - days * 86400
+    in_use = []
+    for prof in wiring.all_profiles():
+        d = wiring.load_cfg(prof)
+        m = d.get("model") or {}
+        for lane, model in [(m.get("provider"), m.get("default") or m.get("model"))] + [
+                (f.get("provider"), f.get("model")) for f in d.get("fallback_providers") or [] if isinstance(f, dict)]:
+            if lane and model and (lane, model) not in in_use:
+                in_use.append((lane, model))
+    out = {}
+    if os.path.exists(DB):
+        c = sqlite3.connect(DB)
+        try:
+            rows = c.execute("SELECT lane, model, at, lat, http, mode, err FROM latency_samples "
+                             "WHERE at >= ? ORDER BY at", (since,)).fetchall()
+        except sqlite3.OperationalError:
+            rows = []          # no sweep has run since the table was added
+        c.close()
+        for lane, model, at, lat, http, mode, err in rows:
+            out.setdefault((lane, model), []).append([at, lat, http, mode, err])
+    rank = {k: i for i, k in enumerate(in_use)}
+    keys = sorted(out, key=lambda k: (k not in rank, rank.get(k, 0), k))
+    return {"since": since, "models": [{"lane": l, "model": m, "in_use": (l, m) in rank, "samples": out[(l, m)]}
+                                       for l, m in keys]}
+
+
 def gateway_status():
     sessions = []
     for f in [os.path.join(HOME_HERMES, "runtime", "active_sessions.json")] + \
@@ -526,6 +555,13 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, wiring.doctor(fix=False))
         if self.path == "/api/gateway":
             return self._send(200, gateway_status())
+        if self.path.split("?")[0] == "/api/latency":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                days = max(1, min(365, int((q.get("days") or ["30"])[0])))
+            except ValueError:
+                days = 30
+            return self._send(200, latency_history(days))
         # Profile detail API
         if self.path.startswith("/api/profile/"):
             # /api/profile/<name> or /api/profile/<name>/soul or /api/profile/<name>/config

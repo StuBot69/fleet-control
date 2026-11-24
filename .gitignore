@@ -1,9 +1,20 @@
-__pycache__/
-*.pyc
+# Runtime artifacts — insurance, not record.
 *.db
 *.db-shm
 *.db-wal
 *.log
-backups/
+*.err.log
+
+# Watchdog dedupe state: which findings were already reported.
+# Runtime state, not record — regenerated on the next run.
 watchdog-state.json
+
+# Backups: regenerated from the live files, not versioned.
+backups/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
 .DS_Store
